@@ -15,8 +15,9 @@ Projeto de portfólio de engenharia de dados do Gabriel Rangel (Rangel Analytics
 - Cada etapa termina com testes passando e um commit. Não avance com teste vermelho.
 
 ## Estado
-- Etapa 1 FEITA: `sql/origem/01_schema_erp_a.sql`, `sql/dw/04_estrela.sql`, bootstrap de papéis e bancos, Docker Compose, teste SQL da origem.
-- Faltam: 2 gerador, 3 cargas, 4 qualidade, 5 GitHub Actions, 6 README + case (Problema / Decisão / Resultado).
+- Etapa 1 FEITA: `sql/origem/01_schema_erp_a.sql`, `sql/dw/04_estrela.sql`, bootstrap de papéis e bancos, Docker Compose, teste SQL da origem. Validada: 8 tabelas em `erp_origem.erp`, 5 em `dw_varejo.dw`, teste SQL verde.
+- Etapa 2 FEITA: `src/pipeline/db.py`, `src/pipeline/catalogo.py`, `src/pipeline/gerador.py` (CLI `--escala` e `--delta`), gabarito `saida/gerador_resumo.json`, 33 testes pytest. Medições em `docs/resultados.md`.
+- Faltam: 3 cargas, 4 qualidade, 5 GitHub Actions, 6 README + case (Problema / Decisão / Resultado).
 
 ## Decisões já tomadas (não reabrir sem motivo)
 - Um servidor Postgres, dois bancos: `erp_origem` (schema `erp`) e `dw_varejo` (schemas `ctl`, `stg`, `trt`, `dw`). Extração pela rede, nunca consulta entre bancos.
@@ -35,7 +36,11 @@ Projeto de portfólio de engenharia de dados do Gabriel Rangel (Rangel Analytics
 cp .env.example .env && docker compose up -d
 docker compose exec -T postgres psql -U postgres -d erp_origem -v ON_ERROR_STOP=1 < tests/sql/01_origem_seguranca_e_trigger.sql
 pip install -r requirements.txt && pytest
+python -m pipeline.gerador --escala pequena --semente 42    # carga inicial
+python -m pipeline.gerador --delta --semente 43             # um dia de operacao
 ```
+Python 3.13 (o PyYAML ainda nao tem wheel para 3.15). Rode num venv:
+`py -V:3.13 -m venv .venv`. Os testes de banco RECRIAM o conteudo de `erp_origem`.
 
 ## README final (etapa 6)
 Em português, com: diagrama Mermaid (origem -> staging -> tratada -> estrela -> conferência); "Como eu integraria um ERP novo" (levantar tabelas e chaves, escrever o mapeamento, carga completa, conferência de totais, ligar incremental, liberar agendamento); segurança (usuário somente leitura, credenciais em variáveis, sem dado pessoal, cargas repetíveis sem duplicar); resultados medidos (só os de `docs/resultados.md`); limites conhecidos (estoque denso, FKs no fato, mesmo servidor).

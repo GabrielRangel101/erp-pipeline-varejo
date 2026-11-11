@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "erp-pipeline-varejo"
+version = "0.2.0"
+description = "Pipeline de integracao com ERP de varejo (dados sinteticos)"
+requires-python = ">=3.11"
+dependencies = ["psycopg[binary]>=3.2,<4", "PyYAML>=6,<7"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+# Deixa "import pipeline" funcionar sem instalar o pacote (util em CI).
+pythonpath = ["src"]
+testpaths = ["tests"]
+markers = [
+    "banco: precisa do Postgres no ar (docker compose up -d)",
+]
