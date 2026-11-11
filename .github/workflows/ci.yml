@@ -43,8 +43,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
-      PYTHONPATH: src
-      # O .env define PGHOST/PGPORT; aqui so para os passos que chamam psql.
+      # Sem PYTHONPATH de proposito: o job instala o pacote com "pip install -e ."
+      # igual ao README. Se o README estiver errado, o CI quebra.
       PGHOST: 127.0.0.1
       PGPORT: "5432"
 
@@ -60,7 +60,9 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - name: Instalar dependencias
-        run: pip install -r requirements.txt
+        run: |
+          pip install -r requirements.txt
+          pip install -e .
 
       - name: Credencial nunca vai para o Git
         run: |

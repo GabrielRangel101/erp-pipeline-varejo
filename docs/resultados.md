@@ -204,6 +204,23 @@ isso que ela não foi limitada a "só os dias que a carga tocou".
 Num incremental o custo é o mesmo em natureza, mas cai para **0,75 s** porque
 as páginas da origem já estão em cache do sistema operacional.
 
+### Um dia de operação, do começo ao fim
+
+Escala média, origem recriada, carga completa (**69,17 s**), um dia de operação
+pelo gerador, carga incremental:
+
+| | |
+|---|---|
+| Itens novos processados | 72.165 |
+| Tempo da carga incremental | **12,71 s** |
+| Grupos conferidos | 34 (`venda_item`) + 32 (`estoque_mov`) |
+
+Esta medição usa `--conferir-desde 2026-11-04`, limitando a conferência à
+janela de reprocessamento. É necessário porque o `--delta` **sempre** injeta a
+chegada tardia de 15 dias: com a conferência padrão (história inteira) essa
+mesma carga leva **14,12 s** e termina em falha de propósito. O trabalho de
+carga é o mesmo nos dois casos; a diferença é quanto da história é reconferida.
+
 ### A conferência falhando, que é o que importa provar
 
 Sequência medida na escala média: carga completa (OK), um dia de operação com
@@ -231,7 +248,13 @@ Depois disso, medido:
 | rodar `--completa` | **OK em 75,56 s**, 491 e 484 grupos, tudo bate |
 
 Na escala pequena a mesma sequência dá falha em **2,80 s**, com 28 itens
-faltando — o número exato de itens das 6 vendas atrasadas.
+faltando em `venda_item` (4 de 131 grupos) e 27 em `estoque_mov` (4 de 124) —
+o número exato de itens das 6 vendas atrasadas e dos movimentos de estoque
+consolidados delas.
+
+A carga completa da escala pequena, com a conferência, levou **7,78 s** numa
+execução e **8,74 s** noutra, com 126 e 120 grupos conferidos. Os grupos são
+determinísticos; o tempo varia com o que mais estiver rodando na máquina.
 
 ### Testes
 

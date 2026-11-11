@@ -20,7 +20,8 @@ Projeto de portfólio de engenharia de dados do Gabriel Rangel (Rangel Analytics
 - Etapa 3 FEITA: `sql/dw/01_controle.sql`, `02_staging.sql`, `03_tratada.sql`; `config/conectores/erp_a.yaml`; módulos `conector`, `controle`, `extracao`, `tratamento`, `calendario`, `estrela`, `limpeza` e a CLI `pipeline.carga` (`--completa` / `--incremental`). 91 testes pytest.
 - Etapa 4 FEITA: `ctl.conferencia` (em `sql/dw/01_controle.sql`), `src/pipeline/conferencia.py` e o portão em `pipeline.carga`. Duas verificações (`venda_item` contra a estrela, `estoque_mov` contra a tratada), por dia e loja, em contagem e valor, com `--conferir-desde` opcional. Carga que não fecha sai com código 1 e NÃO avança a marca-d'água. 107 testes pytest.
 - Etapa 5 FEITA: `.github/workflows/ci.yml`. Sobe o Postgres pelo `docker compose` do projeto (sem secrets, senhas sorteadas no job), roda o teste SQL, o pytest e o ciclo completo na escala pequena — incluindo exigir que a carga incremental com atraso de 15 dias REPROVE. Verde em 1m39s, sem avisos.
-- Falta: 6 README + case (Problema / Decisão / Resultado).
+- Etapa 6 FEITA: `README.md` com o caso (Problema / Decisão / Resultado), diagrama Mermaid, "Como eu integraria um ERP novo", segurança, resultados medidos e limites conhecidos. Todo número do README foi conferido contra `docs/resultados.md`.
+- Fase 1 COMPLETA. Em aberto: segundo ERP sintético (layout diferente) para provar o conector YAML.
 
 ## Decisões já tomadas (não reabrir sem motivo)
 - Um servidor Postgres, dois bancos: `erp_origem` (schema `erp`) e `dw_varejo` (schemas `ctl`, `stg`, `trt`, `dw`). Extração pela rede, nunca consulta entre bancos.
@@ -38,7 +39,7 @@ Projeto de portfólio de engenharia de dados do Gabriel Rangel (Rangel Analytics
 ```bash
 cp .env.example .env && docker compose up -d
 docker compose exec -T postgres psql -U postgres -d erp_origem -v ON_ERROR_STOP=1 < tests/sql/01_origem_seguranca_e_trigger.sql
-pip install -r requirements.txt && pytest
+pip install -r requirements.txt && pip install -e . && pytest
 python -m pipeline.gerador --escala pequena --semente 42    # gera a origem
 python -m pipeline.gerador --delta --semente 43             # um dia de operacao
 python -m pipeline.carga --completa                         # recarrega o DW inteiro
