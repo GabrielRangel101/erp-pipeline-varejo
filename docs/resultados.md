@@ -399,3 +399,45 @@ produtos e ~186 mil cupons na escala média, isso seria ~280 milhões de somas s
 para sortear produto. As somas acumuladas passaram a ser calculadas uma vez e
 passadas em `cum_weights`. A medida de 17,76 s já é com a correção; a versão
 anterior nunca chegou a ser medida na escala média.
+
+---
+
+## Consultas de negócio sobre a estrela
+
+Data da medição: **2026-11-11**, na máquina M1, escala média.
+
+```bash
+python -m pipeline.gerador --escala media --semente 42 --data-ref 2026-11-11
+python -m pipeline.carga --completa
+docker compose exec -T postgres psql -U postgres -d dw_varejo \
+    -v ON_ERROR_STOP=1 -f - < sql/analise/01_receita_por_loja_mes.sql
+```
+
+Estado do DW na medição: `dw.fato_venda_item` com 1.000.016 linhas,
+`dw.fato_estoque_dia` com 720.000, `trt.quarentena` com 78. Sem índice além
+dos que `04_estrela.sql` cria, sem materialização, sem cache aquecido.
+
+| Consulta | Tempo |
+|---|---|
+| `01` receita, margem e ticket por loja e mês | **0,81 s** |
+| `02` ruptura por seção | **1,08 s** |
+| `02` top 10 pares loja × produto | **1,05 s** |
+| `03` curva por dia da semana | **0,78 s** |
+| `03` venda por decêndio do mês | **0,46 s** |
+| `04` quarentena por entidade e motivo | **0,001 s** |
+| `04` valor retido (join com `stg.venda_item`) | **0,05 s** |
+| `04` conferência da última carga | **0,001 s** |
+
+A saída completa das quatro, com a leitura de cada uma, está em
+[analise.md](analise.md).
+
+### A carga completa desta rodada
+
+A carga que gerou o estado acima levou **78,78 s**, contra os **69,51 s**
+medidos em 2026-11-11 mais cedo e os **63,78 s** da medição com `ANALYZE`
+isolado. Mesma máquina, mesmo comando, mesma escala — a diferença é o estado
+do host (container de pé há horas, cache do volume, outras coisas abertas).
+
+Fica registrado em vez de escolhido: a faixa honesta da carga completa da
+escala média nesta máquina é **64 a 79 s**, e o número do README (69,51 s) é
+uma medição no meio dela, não a melhor.

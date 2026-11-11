@@ -165,6 +165,13 @@ jobs:
       - name: A carga completa recupera
         run: python -m pipeline.carga --completa
 
+      - name: As consultas de analise ainda rodam
+        run: |
+          for f in sql/analise/*.sql; do
+            echo "== $f"
+            docker compose exec -T postgres psql -U postgres -d dw_varejo -v ON_ERROR_STOP=1 -q -f - < "$f" > /dev/null
+          done
+
       - name: Diagnostico (so quando algo falha)
         if: failure()
         run: |

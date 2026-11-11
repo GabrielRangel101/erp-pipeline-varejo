@@ -2,11 +2,17 @@
 
 ![ci](https://github.com/GabrielRangel101/erp-pipeline-varejo/actions/workflows/ci.yml/badge.svg)
 
-Integra o ERP de um supermercado num data warehouse em estrela: extração
-incremental, camada de qualidade com quarentena e uma **conferência que
-derruba a carga quando a conta não fecha**.
+**Garante que o número do relatório bate com o número do ERP — e para a
+carga quando não bate.**
 
-Postgres, Python e SQL puro. Sem dbt, sem orquestrador, sem serviço pago.
+Integra o ERP de um supermercado num data warehouse pronto para BI. A cada
+carga ele reconcilia, dia a dia e loja a loja, o que saiu da origem com o que
+entrou no destino. Se faltar uma venda, a carga falha e avisa qual dia está
+errado, em vez de publicar um número menor em silêncio.
+
+Por baixo: extração incremental, camada de qualidade com quarentena e uma
+conferência que derruba a carga quando a conta não fecha. Postgres, Python e
+SQL puro — sem dbt, sem orquestrador, sem serviço pago.
 
 > **Os dados são 100% sintéticos.** O "ERP A" é um banco gerado por este
 > próprio repositório, desenhado para imitar um ERP legado de verdade —
@@ -77,10 +83,55 @@ Medido na escala de 1 milhão de itens de venda (detalhes e método em
 | Testes | **107**, verdes, em 23 s |
 | CI completo no GitHub Actions | **1m39s** |
 
-E o teste que importa: quando o gerador injeta uma venda com 15 dias de atraso
-e a janela de reprocessamento é de 7, a carga incremental **falha**, apontando
-o dia exato e quantas linhas faltam. Não é sorte — é um teste que roda a cada
-push.
+E o teste que importa. Quando o gerador injeta uma venda com 15 dias de
+atraso e a janela de reprocessamento é de 7, a carga incremental **falha**,
+aponta o dia exato e diz quantas linhas faltam:
+
+<table>
+<tr>
+<th align="left">Carga normal</th>
+<th align="left">Carga com atraso fora da janela</th>
+</tr>
+<tr valign="top">
+<td>
+
+```
+conferencia venda_item
+  126 grupos (dia x loja). tudo bate
+conferencia estoque_mov
+  120 grupos (dia x loja). tudo bate
+OK
+
+$ echo $?
+0
+```
+
+Marca-d'água avança. Dado publicado.
+
+</td>
+<td>
+
+```
+FALHA: a conferencia nao fechou:
+origem != destino + quarentena
+  venda_item:  4 de 131 grupos divergem;
+               faltam 28 linha(s)
+  estoque_mov: 4 de 124 grupos divergem;
+               faltam 27 linha(s)
+
+$ echo $?
+1
+```
+
+Marca-d'água **parada**. Nada publicado.
+
+</td>
+</tr>
+</table>
+
+As 28 linhas que faltam são exatamente os itens das 6 vendas que o gerador
+gravou com data retroativa. Nem uma a mais. Não é sorte: é um teste que roda a
+cada push, e o CI exige que essa carga **reprove**.
 
 ---
 
@@ -138,6 +189,29 @@ um ERP de verdade. Não há como "colar" na origem por acidente.
 
 ---
 
+## O que a estrela responde
+
+Um pipeline que ninguém consulta não provou nada. Quatro consultas de negócio
+em SQL puro, em [`sql/analise/`](sql/analise), com a saída real medida sobre 1
+milhão de itens em [docs/analise.md](docs/analise.md):
+
+| Pergunta | O que a consulta prova sobre o modelo |
+|---|---|
+| Receita, margem e ticket por loja e mês | Por que o fato **guarda** o item cancelado em vez de apagá-lo: a receita filtra, e o cancelado vira métrica. Em um mês, na loja maior, são R$ 37 mil que um pipeline ingênuo somaria a mais. |
+| Onde a rede perde venda por ruptura | Por que `fato_estoque_dia` é **denso**: ruptura é ausência de venda, e ausência não tem linha num fato esparso. |
+| Curva de venda na semana e no mês | Que a sazonalidade da origem chega **intacta** na estrela, depois de staging, quarentena, upsert e incremental. |
+| O que a quarentena segurou, e quanto vale | Que linha recusada tem endereço, motivo e valor. Nenhum `JOIN` descarta nada em silêncio. |
+
+Todas respondem em menos de 1,2 s sobre 1.000.016 linhas de venda e 720.000 de
+estoque, num Postgres de configuração padrão, sem índice extra e sem
+materialização.
+
+`docs/analise.md` também registra o que essa base **não** prova: o gerador
+compra menos do que vende, então o nível de ruptura é artefato do dado
+sintético, não retrato de supermercado.
+
+---
+
 ## Rodando
 
 Requer Docker e Python 3.13.
@@ -185,8 +259,16 @@ FALHA: a conferencia nao fechou: origem != destino + quarentena
   rode 'python -m pipeline.carga --completa'.
 ```
 
-As 28 linhas faltando são exatamente os itens das 6 vendas que o gerador
-injetou com 15 dias de atraso. Nem uma a mais.
+A mensagem não diz só que falhou: diz **onde** (quais grupos dia × loja),
+**quanto** (28 linhas) e **o que fazer**. Operador que recebe isso às 3 da
+manhã não precisa abrir o código.
+
+E as consultas de negócio:
+
+```bash
+docker compose exec -T postgres psql -U postgres -d dw_varejo \
+    -v ON_ERROR_STOP=1 -f - < sql/analise/01_receita_por_loja_mes.sql
+```
 
 Testes:
 
@@ -292,7 +374,14 @@ configuração padrão.
 | média (120 dias) | 1.000.094 | 69,51 s | 2,52 s |
 
 Um dia de operação sobre a base de 1 milhão de itens — 72 mil itens novos,
-mais cancelamentos e chegadas tardias — entra em **12,71 s**.
+mais cancelamentos e chegadas tardias — entra em **12,71 s**. E as consultas
+de negócio sobre essa base respondem em menos de 1,2 s cada
+([docs/analise.md](docs/analise.md)).
+
+O mesmo comando medido três vezes na mesma máquina deu 63,78 s, 69,51 s e
+78,78 s, conforme o estado do host. A faixa honesta da carga completa da
+escala média é **64 a 79 s**; o número da tabela é uma medição no meio dela,
+não a melhor. As três estão em [docs/resultados.md](docs/resultados.md).
 
 Três achados que valem mais que os totais, porque mudaram o código:
 
@@ -328,6 +417,12 @@ Escrito aqui porque limite que não está escrito vira surpresa na reunião.
   inválido, os fatos que apontam para ele continuam na estrela com a última
   versão boa da dimensão. A conferência continua fechando; o conteúdo é que
   envelhece.
+- **O gerador compra menos do que vende.** Na escala média entram ~2,5
+  milhões de unidades (inventário inicial + compras) contra ~3,0 milhões de
+  saídas em venda, então o saldo tende ao negativo e a ruptura medida em
+  [docs/analise.md](docs/analise.md) fica alta demais para um supermercado de
+  verdade. Não afeta o pipeline — a conferência de estoque fecha exatamente,
+  porque o que o ERP mandou é o que chegou — mas afeta o realismo da análise.
 - **Um ERP só.** O conector YAML foi desenhado para absorver um layout
   diferente sem mexer em código, e o staging já tem `sistema_origem` em toda
   chave — mas isso só estará *provado* quando um segundo ERP sintético passar
@@ -342,6 +437,12 @@ está em **[docs/construcao.md](docs/construcao.md)** — incluindo a caçada de
 performance que derrubou a carga completa de 127 s para 64 s depois de duas
 hipóteses erradas.
 
+Toda decisão aqui teve uma alternativa razoável que foi descartada. O porquê
+de cada uma, e o que foi descartado, está em
+**[docs/perguntas.md](docs/perguntas.md)**: staging persistente, janela de 7
+dias, cancelado que fica no fato, fato de estoque denso, por que não dbt — e
+como este repositório foi escrito.
+
 ---
 
 ## Estrutura
@@ -351,6 +452,7 @@ config/conectores/     mapeamento origem → staging, por ERP (YAML)
 sql/00_bootstrap/      papéis e bancos
 sql/origem/            esquema do ERP sintético
 sql/dw/                ctl, stg, trt e a estrela
+sql/analise/           consultas de negócio sobre a estrela
 src/pipeline/
   conector.py          lê e valida o YAML, monta o SELECT de extração
   extracao.py          origem → staging, por COPY entre os dois bancos
@@ -362,6 +464,8 @@ src/pipeline/
 tests/                 107 testes
 docs/resultados.md     todo número medido, com comando e máquina
 docs/construcao.md     como o projeto foi construído, etapa por etapa
+docs/analise.md        a saída real das consultas de negócio
+docs/perguntas.md      por que cada decisão, e o que foi descartado
 docs/pipeline.svg      o diagrama, para usar fora do GitHub
 ```
 
