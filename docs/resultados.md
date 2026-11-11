@@ -243,21 +243,25 @@ dizer "passou" não prova nada.
 
 ## Etapa 5 — CI no GitHub Actions
 
-Primeira execução: **`main` @ 535ea30, 2026-11-11, verde em 1m21s**
-([run 43050504989](https://github.com/GabrielRangel101/erp-pipeline-varejo/actions/runs/43050504989)).
-Runner `ubuntu-24.04`, Python 3.13, Postgres 16 subido pelo `docker compose` do
-próprio projeto.
+Execução de referência: **`main` @ 4eb8685, 2026-11-11, verde em 1m39s, sem
+avisos** ([run 43050933646](https://github.com/GabrielRangel101/erp-pipeline-varejo/actions/runs/43050933646)).
+Runner `ubuntu-24.04` fixo, `actions/checkout@v7`, `actions/setup-python@v7`,
+Python 3.13, Postgres 16 subido pelo `docker compose` do próprio projeto.
 
 | Passo | Tempo |
 |---|---:|
-| pytest (107 testes) | 26 s |
-| Subir o Postgres (pull + healthcheck) | 14 s |
+| pytest (107 testes) | 32 s |
+| Subir o Postgres (pull + healthcheck) | 20 s |
 | Gerar a origem e carga completa | 13 s |
 | Carga completa recuperando | 11 s |
 | Carga incremental reprovando | 5 s |
 | Instalar dependências | 4 s |
-| Teste SQL, esquema, marca-d'água, limpeza | < 2 s |
-| **total do job** | **1m21s** |
+| Teste SQL, esquema, marca-d'água, limpeza | ~2 s |
+| **total do job** | **1m39s** |
+
+A execução anterior (`535ea30`, run 43050504989) foi verde em 1m21s, mas rodava
+em `ubuntu-latest` com `checkout@v4` e `setup-python@v5`, e o GitHub avisava de
+ambas as coisas. Os 18 s a mais são variação de runner, não custo da correção.
 
 O job não se limita a rodar `pytest`. Ele exercita o ciclo inteiro na escala
 pequena e **exige que a rede de proteção funcione**: a carga incremental com
