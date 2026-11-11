@@ -86,6 +86,11 @@ push.
 
 ## Como funciona
 
+![Fluxo do pipeline: origem, staging, tratada, estrela e conferencia](docs/pipeline.svg)
+
+<details>
+<summary>Mesmo diagrama em Mermaid (para editar)</summary>
+
 ```mermaid
 flowchart LR
     ERP[("erp_origem<br/>8 tabelas do ERP<br/>sem FK, dt_alt por trigger")]
@@ -113,6 +118,8 @@ flowchart LR
     CONF -->|"nao fecha"| STOP
     CONF -->|"fecha"| CTL
 ```
+
+</details>
 
 Cada camada tem um trabalho e só um:
 
@@ -328,6 +335,15 @@ Escrito aqui porque limite que não está escrito vira surpresa na reunião.
 
 ---
 
+## Como foi construído
+
+O caminho das seis etapas, com as decisões, as medições e as voltas erradas,
+está em **[docs/construcao.md](docs/construcao.md)** — incluindo a caçada de
+performance que derrubou a carga completa de 127 s para 64 s depois de duas
+hipóteses erradas.
+
+---
+
 ## Estrutura
 
 ```
@@ -345,6 +361,8 @@ src/pipeline/
   gerador.py           gera o ERP sintético, com os defeitos de propósito
 tests/                 107 testes
 docs/resultados.md     todo número medido, com comando e máquina
+docs/construcao.md     como o projeto foi construído, etapa por etapa
+docs/pipeline.svg      o diagrama, para usar fora do GitHub
 ```
 
 ---

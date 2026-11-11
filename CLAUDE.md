@@ -21,7 +21,8 @@ Projeto de portfólio de engenharia de dados do Gabriel Rangel (Rangel Analytics
 - Etapa 4 FEITA: `ctl.conferencia` (em `sql/dw/01_controle.sql`), `src/pipeline/conferencia.py` e o portão em `pipeline.carga`. Duas verificações (`venda_item` contra a estrela, `estoque_mov` contra a tratada), por dia e loja, em contagem e valor, com `--conferir-desde` opcional. Carga que não fecha sai com código 1 e NÃO avança a marca-d'água. 107 testes pytest.
 - Etapa 5 FEITA: `.github/workflows/ci.yml`. Sobe o Postgres pelo `docker compose` do projeto (sem secrets, senhas sorteadas no job), roda o teste SQL, o pytest e o ciclo completo na escala pequena — incluindo exigir que a carga incremental com atraso de 15 dias REPROVE. Verde em 1m39s, sem avisos.
 - Etapa 6 FEITA: `README.md` com o caso (Problema / Decisão / Resultado), diagrama Mermaid, "Como eu integraria um ERP novo", segurança, resultados medidos e limites conhecidos. Todo número do README foi conferido contra `docs/resultados.md`.
-- Fase 1 COMPLETA. Em aberto: segundo ERP sintético (layout diferente) para provar o conector YAML.
+- Fase 1 COMPLETA. Fechamento: `docs/pipeline.svg` (diagrama que funciona fora do GitHub, usado no README) e `docs/construcao.md` (o "making of" das seis etapas, com os erros e as medições).
+- Em aberto: segundo ERP sintético (layout diferente) para provar o conector YAML. Três pontos já identificados que ele exporia: vocabulário do ERP está em `tratamento.py` e não no YAML; chave composta funciona na extração mas não na quarentena; a marca-d'água assume timestamp.
 
 ## Decisões já tomadas (não reabrir sem motivo)
 - Um servidor Postgres, dois bancos: `erp_origem` (schema `erp`) e `dw_varejo` (schemas `ctl`, `stg`, `trt`, `dw`). Extração pela rede, nunca consulta entre bancos.
