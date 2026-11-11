@@ -1,0 +1,28 @@
+# Postgres local para desenvolvimento. Os bancos erp_origem e dw_varejo são
+# criados na primeira subida (volume vazio) por docker/initdb/00_inicializar.sh.
+# Para recriar do zero: docker compose down -v && docker compose up -d
+services:
+  postgres:
+    image: postgres:16
+    container_name: erp_pipeline_pg
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${PG_SUPERUSER_PASSWORD:?copie .env.example para .env}
+      ERP_APP_PASSWORD: ${ERP_APP_PASSWORD:?copie .env.example para .env}
+      ERP_RO_PASSWORD: ${ERP_RO_PASSWORD:?copie .env.example para .env}
+      PIPELINE_PASSWORD: ${PIPELINE_PASSWORD:?copie .env.example para .env}
+    ports:
+      - "127.0.0.1:${PGPORT:-5432}:5432"   # só no localhost
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./sql:/sql:ro
+      - ./scripts:/scripts:ro
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d dw_varejo"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pgdata:
