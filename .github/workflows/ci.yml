@@ -36,7 +36,11 @@ concurrency:
 
 jobs:
   pipeline:
-    runs-on: ubuntu-latest
+    # Imagem FIXA, nao ubuntu-latest. A migracao do label para uma versao
+    # nova do Ubuntu trocaria o ambiente embaixo do pipeline sem ninguem
+    # pedir. Quando esta imagem for aposentada o CI quebra de uma vez, que e
+    # o modo de falha certo: alto, e nao um resultado que mudou sozinho.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       PYTHONPATH: src
@@ -45,9 +49,9 @@ jobs:
       PGPORT: "5432"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           # Fixa a versao: o PyYAML ainda nao tem wheel para 3.15 e o build
           # da fonte quebra. Ver docs/resultados.md.

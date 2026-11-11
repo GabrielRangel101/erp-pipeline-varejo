@@ -241,6 +241,35 @@ dizer "passou" não prova nada.
 
 ---
 
+## Etapa 5 — CI no GitHub Actions
+
+Primeira execução: **`main` @ 535ea30, 2026-11-11, verde em 1m21s**
+([run 43050504989](https://github.com/GabrielRangel101/erp-pipeline-varejo/actions/runs/43050504989)).
+Runner `ubuntu-24.04`, Python 3.13, Postgres 16 subido pelo `docker compose` do
+próprio projeto.
+
+| Passo | Tempo |
+|---|---:|
+| pytest (107 testes) | 26 s |
+| Subir o Postgres (pull + healthcheck) | 14 s |
+| Gerar a origem e carga completa | 13 s |
+| Carga completa recuperando | 11 s |
+| Carga incremental reprovando | 5 s |
+| Instalar dependências | 4 s |
+| Teste SQL, esquema, marca-d'água, limpeza | < 2 s |
+| **total do job** | **1m21s** |
+
+O job não se limita a rodar `pytest`. Ele exercita o ciclo inteiro na escala
+pequena e **exige que a rede de proteção funcione**: a carga incremental com
+atraso de 15 dias tem que reprovar. Se ela passar, o CI falha — porque um
+pipeline que para de reclamar é pior do que um que reclama.
+
+Sem nenhum secret: as quatro senhas são sorteadas pelo próprio job, mascaradas
+no log e descartadas com o container. Quem clonar o repositório tem CI
+funcionando sem configurar nada.
+
+---
+
 ## Achados de desempenho
 
 ### `PGHOST=localhost` custava 10 s por conexão

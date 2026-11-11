@@ -19,7 +19,8 @@ Projeto de portfólio de engenharia de dados do Gabriel Rangel (Rangel Analytics
 - Etapa 2 FEITA: `src/pipeline/db.py`, `src/pipeline/catalogo.py`, `src/pipeline/gerador.py` (CLI `--escala` e `--delta`), gabarito `saida/gerador_resumo.json`, 33 testes pytest. Medições em `docs/resultados.md`.
 - Etapa 3 FEITA: `sql/dw/01_controle.sql`, `02_staging.sql`, `03_tratada.sql`; `config/conectores/erp_a.yaml`; módulos `conector`, `controle`, `extracao`, `tratamento`, `calendario`, `estrela`, `limpeza` e a CLI `pipeline.carga` (`--completa` / `--incremental`). 91 testes pytest.
 - Etapa 4 FEITA: `ctl.conferencia` (em `sql/dw/01_controle.sql`), `src/pipeline/conferencia.py` e o portão em `pipeline.carga`. Duas verificações (`venda_item` contra a estrela, `estoque_mov` contra a tratada), por dia e loja, em contagem e valor, com `--conferir-desde` opcional. Carga que não fecha sai com código 1 e NÃO avança a marca-d'água. 107 testes pytest.
-- Faltam: 5 GitHub Actions, 6 README + case (Problema / Decisão / Resultado).
+- Etapa 5 FEITA: `.github/workflows/ci.yml`. Sobe o Postgres pelo `docker compose` do projeto (sem secrets, senhas sorteadas no job), roda o teste SQL, o pytest e o ciclo completo na escala pequena — incluindo exigir que a carga incremental com atraso de 15 dias REPROVE. Verde em 1m21s.
+- Falta: 6 README + case (Problema / Decisão / Resultado).
 
 ## Decisões já tomadas (não reabrir sem motivo)
 - Um servidor Postgres, dois bancos: `erp_origem` (schema `erp`) e `dw_varejo` (schemas `ctl`, `stg`, `trt`, `dw`). Extração pela rede, nunca consulta entre bancos.
