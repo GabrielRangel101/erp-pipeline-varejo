@@ -1,0 +1,141 @@
+# =====================================================================
+# Conector do ERP A  ->  staging canonico
+#
+# Integrar um ERP novo e escrever um arquivo destes. Nenhum .py muda.
+#
+# Como se le:
+#   entidades.<nome canonico>.tabela    tabela na origem
+#   entidades.<nome>.chave              chave natural (vira PK no staging)
+#   entidades.<nome>.coluna_alteracao   coluna de ultima alteracao; e sobre ela
+#                                       que a marca-d'agua e a janela de
+#                                       reprocessamento sao aplicadas
+#   entidades.<nome>.colunas            coluna_no_staging: coluna_na_origem
+#
+# A chave do mapa e o nome CANONICO (o que existe em stg.*); o valor e o que o
+# ERP chama. Num ERP B com "COD_FILIAL" em vez de "cod_loja", muda so o valor.
+#
+# Para o caso raro em que a origem nao tem a coluna pronta, o valor pode ser
+# uma expressao SQL:
+#       vl_total: { expr: "qtd * vl_unit - coalesce(vl_desc, 0)" }
+# ATENCAO: expressao e codigo, interpolado direto no SELECT. Este arquivo tem o
+# mesmo nivel de confianca de um .py do repositorio. Nomes simples de coluna
+# sao validados contra [a-z_][a-z0-9_]*; "expr" nao e validado de proposito.
+#
+# Nao estao aqui: mov_compra e mov_compra_item. A estrela da fase 1 nao tem
+# fato de compra, e a entrada por compra chega ao DW pelos movimentos CMP de
+# estoque_mov. Extrair o que nao se usa so custa tempo de carga.
+# =====================================================================
+
+sistema_origem: erp_a
+descricao: ERP A sintetico de varejo alimentar (banco erp_origem, schema erp)
+schema: erp
+
+# Janela de reprocessamento: a cada carga incremental o pipeline relê tudo com
+# dt_alt >= marca_dagua - N dias. E o que recupera a linha que o ERP gravou com
+# dt_alt retroativo (importacao, contingencia fiscal). Linha que chega com mais
+# de N dias de atraso NAO e recuperada - e a conferencia da etapa 4 tem que
+# falhar por causa dela, nao passar batido.
+janela_reprocessamento_dias: 7
+
+entidades:
+
+  loja:
+    tabela: cad_loja
+    chave: [cod_loja]
+    coluna_alteracao: dt_alt
+    colunas:
+      cod_loja: cod_loja
+      nome_loja: nome_loja
+      cidade: cidade
+      uf: uf
+      formato: formato
+      dt_abertura: dt_abertura
+      ativa: ativa
+      dt_alt: dt_alt
+
+  fornecedor:
+    tabela: cad_fornecedor
+    chave: [cod_fornecedor]
+    coluna_alteracao: dt_alt
+    colunas:
+      cod_fornecedor: cod_fornecedor
+      razao_social: razao_social
+      uf: uf
+      ativo: ativo
+      dt_cadastro: dt_cadastro
+      dt_alt: dt_alt
+
+  produto:
+    tabela: cad_produto
+    chave: [cod_produto]
+    coluna_alteracao: dt_alt
+    colunas:
+      cod_produto: cod_produto
+      cod_barras: cod_barras
+      descricao: descricao
+      departamento: departamento
+      secao: secao
+      unid_medida: unid_medida
+      cod_fornecedor: cod_fornecedor
+      preco_venda: preco_venda
+      custo_medio: custo_medio
+      ativo: ativo
+      dt_alt: dt_alt
+
+  venda:
+    tabela: mov_venda
+    chave: [id_venda]
+    coluna_alteracao: dt_alt
+    colunas:
+      id_venda: id_venda
+      cod_loja: cod_loja
+      nr_caixa: nr_caixa
+      nr_cupom: nr_cupom
+      dt_venda: dt_venda
+      status: status
+      vl_bruto: vl_bruto
+      vl_desconto: vl_desconto
+      vl_total: vl_total
+      forma_pagto: forma_pagto
+      dt_alt: dt_alt
+
+  venda_item:
+    tabela: mov_venda_item
+    chave: [id_item]
+    coluna_alteracao: dt_alt
+    colunas:
+      id_item: id_item
+      id_venda: id_venda
+      nr_item: nr_item
+      cod_produto: cod_produto
+      qtd: qtd
+      vl_unit: vl_unit
+      vl_desconto: vl_desconto
+      vl_total: vl_total
+      vl_custo_unit: vl_custo_unit
+      status_item: status_item
+      dt_alt: dt_alt
+    # Cancelar uma venda neste ERP atualiza SO o cabecalho: o item continua com
+    # status 'N' e dt_alt antigo. Extrair item apenas por dt_alt perderia todo
+    # cancelamento. Por isso o incremental tambem puxa os itens cujo CABECALHO
+    # mudou na janela.
+    reextrair_quando_pai_mudar:
+      tabela_pai: mov_venda
+      coluna_ligacao: id_venda          # coluna nesta tabela
+      coluna_ligacao_pai: id_venda      # coluna correspondente na tabela pai
+      coluna_alteracao_pai: dt_alt
+
+  estoque_mov:
+    tabela: mov_estoque
+    chave: [id_mov]
+    coluna_alteracao: dt_alt
+    colunas:
+      id_mov: id_mov
+      cod_loja: cod_loja
+      cod_produto: cod_produto
+      dt_mov: dt_mov
+      tp_mov: tp_mov
+      sentido: sentido
+      qtd: qtd
+      doc_origem: doc_origem
+      dt_alt: dt_alt

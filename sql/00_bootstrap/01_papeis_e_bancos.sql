@@ -29,6 +29,14 @@ ALTER ROLE erp_ro SET default_transaction_read_only = on;
 ALTER ROLE erp_ro SET statement_timeout = '10min';
 ALTER ROLE erp_ro SET idle_in_transaction_session_timeout = '5min';
 
+-- Rede de seguranca contra transacao esquecida aberta. Mata so quem esta
+-- OCIOSO dentro de transacao, nunca quem esta trabalhando, entao nao atrapalha
+-- carga longa. Sem isto, um cliente que fez SELECT e nao fechou a transacao
+-- segura ACCESS SHARE e qualquer TRUNCATE na origem espera para sempre
+-- (aconteceu de verdade na suite de testes da etapa 3).
+ALTER ROLE erp_app  SET idle_in_transaction_session_timeout = '5min';
+ALTER ROLE pipeline SET idle_in_transaction_session_timeout = '5min';
+
 -- Bancos
 SELECT 'CREATE DATABASE erp_origem OWNER erp_app'
 WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'erp_origem')

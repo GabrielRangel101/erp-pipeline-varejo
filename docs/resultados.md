@@ -104,6 +104,76 @@ o conteúdo de `erp_origem`.
 
 ---
 
+## Etapa 3 — cargas
+
+Data da medição: **2026-11-11**, máquina M1, Postgres com a configuração
+**padrão** da imagem (`shared_buffers` 128 MB, `max_wal_size` 1 GB).
+
+```bash
+python -m pipeline.carga --completa
+python -m pipeline.carga --incremental
+```
+
+### Tempo total
+
+| Escala | Modo | Itens processados | Tempo |
+|---|---|---:|---|
+| pequena | completa | 50.074 | **7,68 s** |
+| pequena | incremental | 14.591 | **2,83 s** |
+| media | completa | 1.000.094 | **63,78 s** |
+| media | incremental | 72.190 | **11,53 s** |
+
+O número que importa para o caso de uso real é o do incremental na escala
+média: **um dia de operação sobre um DW de 1 milhão de itens entra em 11,5
+segundos**.
+
+A carga completa da escala média levava 127,40 s na primeira versão; caiu para
+63,78 s depois do achado do `ANALYZE` descrito adiante.
+
+### Onde o tempo vai (carga completa, escala média)
+
+Medido pelo próprio pipeline, em `ctl.etapa` — execução 60:
+
+| Etapa | Entidade | Linhas | Segundos |
+|---|---|---:|---:|
+| estrela | fato_venda_item | 1.000.016 | 19,10 |
+| estrela | fato_estoque_dia | 720.000 | 17,21 |
+| extracao | venda_item | 1.000.094 | 8,03 |
+| tratamento | venda_item | 1.000.094 | 7,14 |
+| extracao | estoque_mov | 402.849 | 4,62 |
+| extracao | venda | 186.456 | 2,95 |
+| tratamento | estoque_mov | 402.849 | 2,89 |
+| tratamento | venda | 186.456 | 0,97 |
+
+Somando: estrela 36,35 s, extração 15,63 s, tratamento 11,37 s. A estrela
+continua sendo a maior fatia (57%), agora dividida de forma equilibrada entre
+os dois fatos.
+
+### Resultado da carga completa (escala média)
+
+| Camada | Linhas |
+|---|---:|
+| `stg.venda_item` | 1.000.094 |
+| `trt.venda_item` | 1.000.016 |
+| `trt.quarentena` (venda_item) | 78 |
+| `dw.fato_venda_item` | 1.000.016 |
+| `dw.fato_estoque_dia` | 720.000 |
+| `dw.dim_produto` | 1.500 |
+| `dw.dim_calendario` | 730 |
+
+Conferência: 1.000.016 + 78 = 1.000.094. **Fecha.** Banco `dw_varejo`: 952 MB.
+
+Quarentena por motivo, na carga completa:
+`qtd_invalida` 24, `total_divergente` 20, `produto_inexistente` 12,
+`venda_inexistente` 12, `cabecalho_invalido` 10 — e em `venda`,
+`loja_inexistente` 5 e `status_invalido` 5. Bate com o gabarito do gerador.
+
+### Testes
+
+**91 testes, 15,54 s**, todos verdes.
+
+---
+
 ## Achados de desempenho
 
 ### `PGHOST=localhost` custava 10 s por conexão
@@ -126,6 +196,78 @@ Efeito no tempo total do gerador (mesma carga, mesma semente):
 |---|---|---|
 | `--escala pequena` | 11,74 s | 1,68 s |
 | `--delta` | 10,11 s | 0,10 s |
+
+### Dimensão recarregada sem `ANALYZE` custava 57 s por carga completa
+
+O achado mais caro da etapa 3, e o mais fácil de passar batido.
+
+A carga completa trunca `dim_loja` e `dim_produto` e repopula as duas. Logo
+depois, o `INSERT` do `fato_venda_item` faz join com elas para resolver as
+chaves substitutas. Entre a repopulação e o autoanalyze do Postgres existe uma
+janela em que o planner acha que a dimensão está vazia — e escolhe o plano
+errado para um join de 1 milhão de linhas.
+
+Como o problema apareceu: o passo `fato_venda_item` levava **78 s** dentro da
+carga, mas o **mesmo SQL, isolado, num sistema ocioso e com a tabela truncada,
+levava 21 s**. Essa diferença de 3,7× não tinha explicação no SQL.
+
+Duas hipóteses testadas e **descartadas** antes de achar a certa:
+
+| Hipótese | Experimento | Resultado |
+|---|---|---|
+| Lixo deixado pelo `DELETE` (1.009.151 tuplas mortas, 224 MB) | trocar `DELETE` por `TRUNCATE` | 127,4 s → 130,6 s. **Sem efeito** |
+| Pressão de checkpoint/WAL (15 checkpoints forçados) | `shared_buffers` 128 MB → 1 GB, `max_wal_size` 1 GB → 4 GB | 130,6 s → 123,2 s. **Quase sem efeito** |
+| **Estatística da dimensão recém-recarregada** | `ANALYZE` na dimensão logo após carregá-la | 130,6 s → **73,3 s** |
+
+Com o `ANALYZE`, o passo `fato_venda_item` caiu de **78,99 s para 21,91 s** —
+exatamente o tempo do mesmo SQL medido isolado (21,17 s). A diferença estava
+toda aí.
+
+Efeito na carga completa da escala média (configuração padrão do Postgres):
+
+| | Antes | Depois |
+|---|---|---|
+| total | 130,57 s | **73,34 s** |
+| estrela | 96,68 s | 39,70 s |
+| `fato_venda_item` | 78,99 s | 21,91 s |
+
+Medindo de novo do zero, com a origem recriada e o `ANALYZE` restrito à carga
+completa, a carga completa da escala média ficou em **63,78 s** (contra
+**127,40 s** da primeira versão) e o `fato_venda_item` em **19,10 s**.
+
+O mesmo cuidado vale para a camada tratada, que também é recarregada e depois
+sofre join: o `ANALYZE` foi colocado nos dois lugares.
+
+**Só na carga completa.** No incremental a tabela não foi truncada, a
+estatística continua boa e o `ANALYZE` vira custo fixo puro: medido, ele
+levava a carga incremental da escala pequena de **2,13 s para 4,87 s** — mais
+que o dobro, sem nenhum ganho. Com a restrição, voltou a **2,83 s**.
+
+Observação honesta: o `TRUNCATE` foi mantido mesmo sem ganho de tempo, porque
+`DELETE` deixa 224 MB de espaço morto para o autovacuum recolher depois e isso
+cresce a cada recarga. O tuning de WAL foi **revertido**: todos os números
+deste documento são com a configuração padrão da imagem `postgres:16`.
+
+### Chave estrangeira no fato custa 2,4× no `INSERT`
+
+Micro-benchmark isolado, inserindo 1.000.016 linhas numa cópia da tabela
+(`CREATE TABLE ... LIKE ... INCLUDING ALL`, que copia índices mas não copia FK):
+
+| Cenário | Tempo |
+|---|---|
+| `INSERT` sem chave estrangeira | **8,72 s** |
+| `INSERT` com as 3 chaves estrangeiras | **20,70 s** |
+| `INSERT` com as 3 FKs + `ON CONFLICT DO UPDATE` | **22,17 s** |
+
+Cada linha dispara três verificações de FK como gatilho `AFTER ROW`, o que
+enfileira 3 milhões de eventos. O `ON CONFLICT` em si é quase de graça
+(20,70 → 22,17 s).
+
+As FKs ficam. O custo é ~12 s por carga completa na escala média e elas são a
+garantia de que nenhum fato aponta para dimensão inexistente — o teste
+`test_fato_so_aponta_para_dimensao_existente` depende disso. Em volume maior o
+caminho seria soltá-las durante a carga e revalidar no fim, e é por isso que
+"FKs no fato" está em "limites conhecidos" do README.
 
 ### `random.choices(weights=...)` dentro do laço
 

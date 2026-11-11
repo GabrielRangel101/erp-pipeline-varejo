@@ -24,6 +24,10 @@ from pipeline.gerador import Gabarito
 
 pytestmark = pytest.mark.banco
 
+
+class _Desfazer(Exception):
+    """Sai de "with conexao.transaction()" desfazendo o que foi escrito."""
+
 # Cada tipo de defeito e a consulta que o encontra na origem.
 CONSULTAS_DEFEITO = {
     "item_orfao_venda":
@@ -163,12 +167,15 @@ def test_venda_cancelada_nao_toca_nos_itens(inicial):
 def test_sequencias_ajustadas_apos_o_copy(inicial):
     """Sem setval, o primeiro INSERT depois da carga colidiria com os ids do COPY."""
     _gab, conexao = inicial
-    cur = conexao.cursor()
     maximo = contar(conexao, "SELECT max(id_venda) FROM erp.mov_venda")
-    cur.execute("INSERT INTO erp.mov_venda (cod_loja, dt_venda, status) "
-                "VALUES (1, localtimestamp, 'F') RETURNING id_venda")
-    novo = cur.fetchone()[0]
-    conexao.rollback()
+    novo = None
+    with pytest.raises(_Desfazer):
+        with conexao.transaction():
+            linha = conexao.execute(
+                "INSERT INTO erp.mov_venda (cod_loja, dt_venda, status) "
+                "VALUES (1, localtimestamp, 'F') RETURNING id_venda").fetchone()
+            novo = linha[0]
+            raise _Desfazer
     assert novo > maximo
 
 
@@ -275,8 +282,10 @@ def test_delta_injeta_todos_os_tipos_de_inconsistencia(delta):
 
 
 def test_delta_exige_carga_inicial(conexao):
-    cur = conexao.cursor()
-    cur.execute(f"TRUNCATE {', '.join('erp.' + t for t in gerador.TABELAS_ERP)}")
-    with pytest.raises(RuntimeError, match="carga inicial"):
-        gerador.carga_delta(conexao, SEMENTE, DATA_REF, None, Gabarito())
-    conexao.rollback()
+    with pytest.raises(_Desfazer):
+        with conexao.transaction():
+            conexao.execute("TRUNCATE "
+                            + ", ".join("erp." + t for t in gerador.TABELAS_ERP))
+            with pytest.raises(RuntimeError, match="carga inicial"):
+                gerador.carga_delta(conexao, SEMENTE, DATA_REF, None, Gabarito())
+            raise _Desfazer
