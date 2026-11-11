@@ -76,11 +76,11 @@ Medido na escala de 1 milhão de itens de venda (detalhes e método em
 
 | | |
 |---|---|
-| Carga completa do zero | **69,51 s** |
-| Um dia de operação (72 mil itens novos) | **12,71 s** |
-| Conferência da história inteira, a cada carga | **2,52 s** (4% do tempo) |
-| Carga com atraso fora da janela | **reprova**, código de saída 1, marca-d'água parada |
-| Testes | **107**, verdes, em 23 s |
+| Carga completa do zero | **83,48 s** |
+| Um dia de operação (72 mil itens novos) | **14,42 s** |
+| Conferência da história inteira, a cada carga | **2,52 s** |
+| Carga com atraso fora da janela | **reprova**, código de saída 1, DW e marca-d'água intactos |
+| Testes | **111**, verdes, em 40 s |
 | CI completo no GitHub Actions | **1m39s** |
 
 E o teste que importa. Quando o gerador injeta uma venda com 15 dias de
@@ -106,7 +106,7 @@ $ echo $?
 0
 ```
 
-Marca-d'água avança. Dado publicado.
+`COMMIT`. O DW novo aparece inteiro.
 
 </td>
 <td>
@@ -123,7 +123,7 @@ $ echo $?
 1
 ```
 
-Marca-d'água **parada**. Nada publicado.
+`ROLLBACK`. O DW **não mudou**.
 
 </td>
 </tr>
@@ -371,17 +371,20 @@ configuração padrão.
 | Escala | Itens de venda | Carga completa | Conferência |
 |---|---:|---:|---:|
 | pequena (30 dias) | 50.074 | 7,78 s | inclusa |
-| média (120 dias) | 1.000.094 | 69,51 s | 2,52 s |
+| média (120 dias) | 1.000.094 | 83,48 s | 2,52 s |
 
 Um dia de operação sobre a base de 1 milhão de itens — 72 mil itens novos,
-mais cancelamentos e chegadas tardias — entra em **12,71 s**. E as consultas
+mais cancelamentos e chegadas tardias — entra em **14,42 s**. E as consultas
 de negócio sobre essa base respondem em menos de 1,2 s cada
 ([docs/analise.md](docs/analise.md)).
 
-O mesmo comando medido três vezes na mesma máquina deu 63,78 s, 69,51 s e
-78,78 s, conforme o estado do host. A faixa honesta da carga completa da
-escala média é **64 a 79 s**; o número da tabela é uma medição no meio dela,
-não a melhor. As três estão em [docs/resultados.md](docs/resultados.md).
+**Sobre a variação.** O mesmo comando, na mesma máquina, deu de 63,78 s a
+98,09 s ao longo de oito execuções, conforme o estado do host (cache do
+volume, lixo acumulado de cargas anteriores, o que mais estiver aberto). Os
+números da tabela são os do único protocolo repetível: `docker compose down -v`,
+banco recriado do zero, uma medição. Quem rodar aqui vai ver outro número — e
+`docs/resultados.md` registra todos eles, com o método de cada um, em vez de
+escolher o menor.
 
 Três achados que valem mais que os totais, porque mudaram o código:
 
@@ -417,6 +420,20 @@ Escrito aqui porque limite que não está escrito vira surpresa na reunião.
   inválido, os fatos que apontam para ele continuam na estrela com a última
   versão boa da dimensão. A conferência continua fechando; o conteúdo é que
   envelhece.
+- **A publicação é uma única transação.** A estrela, a marca-d'água e a
+  conferência de uma carga vão num `COMMIT` só, e é isso que garante que uma
+  carga reprovada não deixe nada publicado. O preço é que o tamanho de uma
+  carga passa a ser limitado por WAL e espaço em disco: nada é liberado antes
+  do commit. Em volume muito maior, o caminho é publicar por partição (por
+  mês, por loja), uma transação por partição.
+- **A origem é lida em `REPEATABLE READ`.** A extração e a conferência
+  compartilham um retrato fixo da origem, senão uma venda gravada pelo ERP
+  entre as duas leituras viraria falso positivo na conferência. Isso resolve
+  para origem Postgres. O preço é que o snapshot segura o `xmin` do ERP
+  durante a carga inteira, então o autovacuum de lá não recolhe versões de
+  linha mais novas nesse período. Para outro motor de banco, o caminho
+  portável é um corte superior em `dt_alt` aplicado igualmente nos dois lados
+  — não está implementado.
 - **O gerador compra menos do que vende.** Na escala média entram ~2,5
   milhões de unidades (inventário inicial + compras) contra ~3,0 milhões de
   saídas em venda, então o saldo tende ao negativo e a ruptura medida em
@@ -461,7 +478,7 @@ src/pipeline/
   conferencia.py       origem = destino + quarentena
   carga.py             orquestra e decide se a carga passou
   gerador.py           gera o ERP sintético, com os defeitos de propósito
-tests/                 107 testes
+tests/                 111 testes
 docs/resultados.md     todo número medido, com comando e máquina
 docs/construcao.md     como o projeto foi construído, etapa por etapa
 docs/analise.md        a saída real das consultas de negócio

@@ -13,3 +13,7 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+
+# retratos do DW gerados pelo passo de publicacao atomica no CI
+dw_antes.txt
+dw_depois.txt

@@ -331,7 +331,12 @@ def montar_mensagem(falhas: list[ResultadoConferencia]) -> str:
             linhas.append(f"    ... e mais {resto} grupo(s). "
                           "Veja ctl.conferencia WHERE NOT bateu.")
     linhas.append(
-        "  A marca-d'agua NAO foi avancada. Se a causa for linha que o ERP "
-        "gravou com dt_alt fora da janela de reprocessamento, o incremental "
-        "nao alcanca ela: rode 'python -m pipeline.carga --completa'.")
+        "  O DW NAO foi alterado: a publicacao e uma transacao so e ela foi "
+        "desfeita inteira. Quem consulta o DW continua vendo o estado "
+        "anterior, e a marca-d'agua NAO foi avancada.")
+    linhas.append(
+        "  Se a causa for linha que o ERP gravou com dt_alt fora da janela de "
+        "reprocessamento, o incremental nao alcanca ela: rode "
+        "'python -m pipeline.carga --completa'. Ela tambem publica em uma "
+        "transacao so, entao se reprovar o DW atual fica como esta.")
     return "\n".join(linhas)

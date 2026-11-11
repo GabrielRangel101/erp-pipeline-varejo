@@ -431,6 +431,48 @@ dos que `04_estrela.sql` cria, sem materialização, sem cache aquecido.
 A saída completa das quatro, com a leitura de cada uma, está em
 [analise.md](analise.md).
 
+## Publicação atômica — antes e depois
+
+Data da medição: **2026-11-11**, máquina M1, escala média.
+
+A mudança põe limpeza da estrela, estrela, conferência e marca-d'água numa
+transação só. A pergunta era se a transação maior custaria tempo. **Não custa
+— e a pergunta mais difícil foi separar o efeito do código do efeito do
+estado da máquina.**
+
+Primeira tentativa, duas passadas alternando a ordem:
+
+| Passada | Ordem | completa antes | completa depois | incremental antes | incremental depois |
+|---|---|---:|---:|---:|---:|
+| 1 | antes, depois | 82,66 s | 87,40 s | 12,00 s | 14,29 s |
+| 2 | depois, antes | 98,09 s | — | 19,17 s | 16,11 s |
+
+Lido isolado, o incremental da passada 1 parecia **+19%**. Mas a passada 2
+inverteu o sinal, e o *antes* da passada 2 (98,09 s) ficou mais lento que o
+*depois* da passada 1 (87,40 s): o host estava derivando mais do que o código.
+
+Medição decisiva, com `docker compose down -v` antes de cada lado — banco
+recriado do zero, mesmo protocolo nos dois:
+
+| Modo | Antes (`418b358`) | Depois (`ab10cb4`) | Diferença |
+|---|---:|---:|---:|
+| completa, escala média | 85,39 s | **83,48 s** | −2,2% |
+| incremental (72 mil itens) | 16,28 s | **14,42 s** | −11,4% |
+
+Dentro do ruído, sem regressão. O ganho aparente do incremental provavelmente
+vem de não haver mais três `COMMIT` intermediários em `estrela.carregar`.
+
+### Por que 83 s hoje e 63,78 s em outra medição do mesmo dia
+
+Porque a máquina não era a mesma máquina. O código **antigo** também dá 85,39 s
+nas condições de agora. Ao longo do dia, oito execuções da carga completa da
+escala média deram de **63,78 s a 98,09 s**, com o container de pé por horas,
+o volume crescendo e cargas repetidas deixando lixo.
+
+O número publicado no README passou a ser o do protocolo repetível (banco do
+zero). É mais lento que o melhor número já medido, e é o que alguém que clonar
+o repositório tem chance de reproduzir.
+
 ### A carga completa desta rodada
 
 A carga que gerou o estado acima levou **78,78 s**, contra os **69,51 s**
