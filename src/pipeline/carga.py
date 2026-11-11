@@ -11,7 +11,9 @@ Ordem fixa, e o motivo de cada passo estar onde esta:
   2. tratamento   stg -> trt + quarentena. So aqui alguma linha e recusada.
   3. estrela      trt -> dw. Dimensao antes de fato; fato so entra com sk
                   resolvida.
-  4. marca-d'agua avanca SO AGORA, e so se os tres passos acima passaram. Se a
+  4. conferencia  origem == destino + quarentena, por dia e loja, em contagem
+                  e em valor. E um PORTAO: se nao fecha, a carga falha aqui.
+  5. marca-d'agua avanca SO AGORA, e so se os quatro passos acima passaram. Se a
                   carga morrer em qualquer ponto, a marca fica onde estava e a
                   proxima rodada rele a mesma janela. Como todo passo e upsert
                   por chave natural, reler nao duplica. Avancar a marca cedo
@@ -21,9 +23,17 @@ Codigo de saida: 0 se terminou OK, 1 se falhou. A execucao fica registrada em
 ctl.execucao com status FALHA e a mensagem do erro, entao o agendador pode
 alarmar sem precisar ler log.
 
-A conferencia (origem == estrela + quarentena) e a etapa 4 e ainda NAO roda
-aqui: esta carga nao sabe dizer se o resultado esta certo, so se os passos
-rodaram.
+Quando a conferencia falha a marca-d'agua FICA ONDE ESTAVA de proposito. A
+proxima rodada vai reler a mesma janela e falhar de novo, ate alguem olhar.
+Um pipeline que destrava sozinho depois de nao fechar a conta so troca erro
+alto por erro silencioso.
+
+O que a carga ja escreveu no DW NAO e desfeito nesse caso. A conferencia roda
+depois da estrela, e cada passo comita o seu pedaco (senao uma carga de 1
+milhao de linhas viraria uma transacao gigante). O dado que entrou esta
+certo - so esta INCOMPLETO. Quem impede isso de virar silencio sao as duas
+outras coisas: a marca-d'agua parada e o status FALHA em ctl.execucao. A saida
+e 'python -m pipeline.carga --completa'.
 """
 
 from __future__ import annotations
@@ -32,12 +42,12 @@ import argparse
 import sys
 import time
 import traceback
-from datetime import datetime
+from datetime import date, datetime
 
 import psycopg
 
 from pipeline import conector as mod_conector
-from pipeline import controle, estrela, extracao, tratamento
+from pipeline import conferencia, controle, estrela, extracao, tratamento
 from pipeline.conector import Conector
 from pipeline.controle import Execucao
 from pipeline.db import conectar_dw, conectar_origem_leitura
@@ -64,7 +74,8 @@ def _extrair_tudo(conn_origem: psycopg.Connection, conn_dw: psycopg.Connection,
     return marcas
 
 
-def executar(conector: Conector, completa: bool) -> int:
+def executar(conector: Conector, completa: bool,
+             conferir_desde: date | None = None) -> int:
     modo = "completa" if completa else "incremental"
     inicio = time.perf_counter()
 
@@ -100,6 +111,12 @@ def executar(conector: Conector, completa: bool) -> int:
               f"fato_estoque_dia={alvo.fato_estoque_dia:,} "
               f"(desde {alvo.estoque_desde})".replace(",", "."))
 
+        for resultado in conferencia.conferir(conn_origem, conn_dw, execucao,
+                                              conferir_desde):
+            print(f"  conferencia {resultado.verificacao:<13} "
+                  f"{resultado.grupos:,} grupos (dia x loja) conferidos, "
+                  f"tudo bate".replace(",", "."))
+
         # So agora. Ver o cabecalho deste modulo.
         for entidade, dt_alt_max in marcas.items():
             controle.gravar_marca_dagua(execucao, entidade, dt_alt_max)
@@ -133,6 +150,11 @@ def construir_parser() -> argparse.ArgumentParser:
                             "janela de reprocessamento")
     p.add_argument("--conector", default="erp_a",
                    help="nome do conector em config/conectores (padrao: erp_a)")
+    p.add_argument("--conferir-desde", type=date.fromisoformat, default=None,
+                   metavar="AAAA-MM-DD",
+                   help="limita a conferencia a partir desta data. O padrao e "
+                        "conferir a historia inteira, que e o que pega a linha "
+                        "gravada com dt_alt fora da janela de reprocessamento.")
     return p
 
 
@@ -143,7 +165,8 @@ def main(argv: list[str] | None = None) -> int:
     except mod_conector.ConectorInvalido as erro:
         print(f"conector invalido: {erro}", file=sys.stderr)
         return 2
-    return executar(conector, completa=args.completa)
+    return executar(conector, completa=args.completa,
+                    conferir_desde=args.conferir_desde)
 
 
 if __name__ == "__main__":

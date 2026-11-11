@@ -18,7 +18,8 @@ Projeto de portfólio de engenharia de dados do Gabriel Rangel (Rangel Analytics
 - Etapa 1 FEITA: `sql/origem/01_schema_erp_a.sql`, `sql/dw/04_estrela.sql`, bootstrap de papéis e bancos, Docker Compose, teste SQL da origem. Validada: 8 tabelas em `erp_origem.erp`, 5 em `dw_varejo.dw`, teste SQL verde.
 - Etapa 2 FEITA: `src/pipeline/db.py`, `src/pipeline/catalogo.py`, `src/pipeline/gerador.py` (CLI `--escala` e `--delta`), gabarito `saida/gerador_resumo.json`, 33 testes pytest. Medições em `docs/resultados.md`.
 - Etapa 3 FEITA: `sql/dw/01_controle.sql`, `02_staging.sql`, `03_tratada.sql`; `config/conectores/erp_a.yaml`; módulos `conector`, `controle`, `extracao`, `tratamento`, `calendario`, `estrela`, `limpeza` e a CLI `pipeline.carga` (`--completa` / `--incremental`). 91 testes pytest.
-- Faltam: 4 qualidade (conferência origem == estrela + quarentena, com falha e log), 5 GitHub Actions, 6 README + case (Problema / Decisão / Resultado).
+- Etapa 4 FEITA: `ctl.conferencia` (em `sql/dw/01_controle.sql`), `src/pipeline/conferencia.py` e o portão em `pipeline.carga`. Duas verificações (`venda_item` contra a estrela, `estoque_mov` contra a tratada), por dia e loja, em contagem e valor, com `--conferir-desde` opcional. Carga que não fecha sai com código 1 e NÃO avança a marca-d'água. 107 testes pytest.
+- Faltam: 5 GitHub Actions, 6 README + case (Problema / Decisão / Resultado).
 
 ## Decisões já tomadas (não reabrir sem motivo)
 - Um servidor Postgres, dois bancos: `erp_origem` (schema `erp`) e `dw_varejo` (schemas `ctl`, `stg`, `trt`, `dw`). Extração pela rede, nunca consulta entre bancos.
@@ -41,6 +42,7 @@ python -m pipeline.gerador --escala pequena --semente 42    # gera a origem
 python -m pipeline.gerador --delta --semente 43             # um dia de operacao
 python -m pipeline.carga --completa                         # recarrega o DW inteiro
 python -m pipeline.carga --incremental                      # so o que mudou
+# A carga confere origem == destino + quarentena no fim. Se nao fecha, sai com codigo 1.
 ```
 Python 3.13 (o PyYAML ainda nao tem wheel para 3.15). Rode num venv:
 `py -V:3.13 -m venv .venv`. Os testes de banco RECRIAM o conteudo de `erp_origem`.

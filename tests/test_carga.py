@@ -50,11 +50,18 @@ def incremental(conector, conexao_dw):
     """Carga completa, um dia de operacao, carga incremental.
 
     Refaz tudo do zero para nao depender da ordem dos testes.
+
+    O incremental termina em FALHA de PROPOSITO: o delta injeta chegada tardia
+    com 15 dias de atraso, a janela de reprocessamento e de 7, e a conferencia
+    da etapa 4 derruba a carga por causa dela. Isso nao atrapalha os testes
+    abaixo porque a conferencia roda DEPOIS da estrela e ANTES da marca-d'agua:
+    o DW ja esta escrito com tudo que a carga alcancou. Quem prova o
+    comportamento da conferencia em si e tests/test_conferencia.py.
     """
     gerar_origem()
     assert carga.executar(conector, completa=True) == 0
     gabarito = gerar_delta()
-    assert carga.executar(conector, completa=False) == 0
+    assert carga.executar(conector, completa=False) == 1
     return gabarito
 
 

@@ -55,3 +55,45 @@ CREATE TABLE IF NOT EXISTS ctl.etapa (
     duracao_ms      integer      NOT NULL,
     PRIMARY KEY (id_execucao, seq)
 );
+
+-- ---------- Conferencia ----------------------------------------------
+-- Uma linha por execucao x verificacao x dia x loja, com os TRES lados da
+-- conta. A regra e sempre a mesma:
+--
+--     origem == destino + quarentena
+--
+-- Guardar os tres lados, e nao so a diferenca, e o que torna a conferencia
+-- auditavel depois: da para abrir um dia que falhou e ver de que lado faltou.
+-- E guarda TODAS as linhas, nao so as que falharam - conferencia que so
+-- registra falha nao prova que chegou a rodar.
+--
+-- dia e cod_loja sao NULOS de proposito para a linha que nao tem dia nem loja
+-- (item orfao, cujo cabecalho nao existe na origem). Ela precisa ser contada
+-- em algum lugar, senao "nao sumiu nada" vira so uma frase. Como coluna nula
+-- nao entra em PRIMARY KEY, a unicidade vai num indice com coalesce.
+CREATE TABLE IF NOT EXISTS ctl.conferencia (
+    id_conferencia  bigint        GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id_execucao     bigint        NOT NULL REFERENCES ctl.execucao (id_execucao),
+    sistema_origem  varchar(30)   NOT NULL,
+    verificacao     varchar(40)   NOT NULL,   -- venda_item | estoque_mov
+    dia             date,                     -- NULL = linha sem cabecalho
+    cod_loja        integer,                  -- NULL = linha sem loja
+    qtd_origem      bigint        NOT NULL,
+    vl_origem       numeric(20,4) NOT NULL,
+    qtd_destino     bigint        NOT NULL,
+    vl_destino      numeric(20,4) NOT NULL,
+    qtd_quarentena  bigint        NOT NULL,
+    vl_quarentena   numeric(20,4) NOT NULL,
+    dif_qtd         bigint        NOT NULL,   -- origem - (destino + quarentena)
+    dif_valor       numeric(20,4) NOT NULL,
+    bateu           boolean       NOT NULL,
+    dt_conferencia  timestamptz   NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_conferencia_grao ON ctl.conferencia
+    (id_execucao, verificacao,
+     coalesce(dia, DATE '0001-01-01'), coalesce(cod_loja, -1));
+-- Para a pergunta que o operador faz de manha: quando foi a ultima vez que
+-- nao bateu, e onde?
+CREATE INDEX IF NOT EXISTS ix_conferencia_falha ON ctl.conferencia (dt_conferencia DESC)
+    WHERE NOT bateu;

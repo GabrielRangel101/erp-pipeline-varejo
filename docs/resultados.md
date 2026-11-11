@@ -174,6 +174,73 @@ Quarentena por motivo, na carga completa:
 
 ---
 
+## Etapa 4 — conferência
+
+Data da medição: **2026-11-11**, máquina M1, configuração padrão do Postgres.
+
+A regra: `origem == destino + quarentena`, por dia e loja, em contagem **e** em
+valor. Duas verificações:
+
+| Verificação | Origem | Destino | Valor conferido |
+|---|---|---|---|
+| `venda_item` | `erp.mov_venda_item` | `dw.fato_venda_item` + quarentena | `vl_total` |
+| `estoque_mov` | `erp.mov_estoque` | `trt.estoque_mov` + quarentena | `qtd` |
+
+### Custo
+
+A agregação roda dentro de cada banco; só o resumo por dia e loja atravessa a
+rede — 486 linhas na escala média, não 1 milhão.
+
+| Escala | Verificação | Grupos (dia × loja) | Tempo |
+|---|---|---:|---:|
+| media | `venda_item` | 486 | **2,38 s** |
+| media | `estoque_mov` | 480 | **0,14 s** |
+
+Efeito no total da carga completa da escala média: **63,78 s → 69,51 s**. A
+conferência da **história inteira**, a cada carga, custa **2,52 s** sobre 1
+milhão de itens — 4% do tempo. É barata o bastante para ser o padrão, e é por
+isso que ela não foi limitada a "só os dias que a carga tocou".
+
+Num incremental o custo é o mesmo em natureza, mas cai para **0,75 s** porque
+as páginas da origem já estão em cache do sistema operacional.
+
+### A conferência falhando, que é o que importa provar
+
+Sequência medida na escala média: carga completa (OK), um dia de operação com
+o gerador, carga incremental.
+
+```
+FALHA na execucao 138: a conferencia nao fechou: origem != destino + quarentena
+  venda_item: 4 de 491 grupos (dia x loja) divergem; faltam 43 linha(s) e 2882.29 em valor
+  estoque_mov: 4 de 484 grupos (dia x loja) divergem; faltam 41 linha(s) e 125.933 em valor
+  A marca-d'agua NAO foi avancada. [...] rode 'python -m pipeline.carga --completa'.
+```
+
+Código de saída **1**, em **14,12 s**. Os 4 grupos divergentes de cada
+verificação estão **todos no dia 2026-10-27** — exatamente `data_ref` menos 15
+dias, que é a chegada tardia injetada fora da janela de reprocessamento de 7
+dias. Nada mais diverge.
+
+Depois disso, medido:
+
+| | Resultado |
+|---|---|
+| `ctl.execucao` da rodada | `FALHA` |
+| marca-d'água | continua na execução anterior |
+| rodar o incremental de novo | falha de novo (código 1) |
+| rodar `--completa` | **OK em 75,56 s**, 491 e 484 grupos, tudo bate |
+
+Na escala pequena a mesma sequência dá falha em **2,80 s**, com 28 itens
+faltando — o número exato de itens das 6 vendas atrasadas.
+
+### Testes
+
+**107 testes, 23,32 s**, todos verdes. Dos 16 novos, 8 existem só para provar
+que a conferência **reprova** quando tem que reprovar: um teste que só sabe
+dizer "passou" não prova nada.
+
+---
+
 ## Achados de desempenho
 
 ### `PGHOST=localhost` custava 10 s por conexão

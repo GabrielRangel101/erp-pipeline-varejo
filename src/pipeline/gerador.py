@@ -405,10 +405,17 @@ def _proximo_cupom(cupom: dict[int, int], cod_loja: int) -> int:
     return cupom[cod_loja]
 
 
-def _movimentos_do_dia(dia: date, vnd: dict, dev: dict, id_mov: Contador,
-                       codigos: list[int], cods_loja: list[int],
-                       rng: Random) -> list[tuple]:
-    """VND e DEV consolidados por dia, mais alguns AJT e PRD."""
+def _movimentos_de_venda(dia: date, vnd: dict, dev: dict,
+                         id_mov: Contador) -> list[tuple]:
+    """VND e DEV consolidados por dia, loja e produto.
+
+    dt_mov e dt_alt sao os dois o fechamento do dia. Numa chegada tardia isso
+    e o que importa: o movimento nasce com o MESMO atraso da venda que o
+    gerou, entao ele some da janela de reprocessamento junto com ela. Se o
+    movimento chegasse com dt_alt de hoje, o estoque entraria no DW sem a
+    venda correspondente e a conferencia acusaria um furo que nao existe no
+    ERP de verdade.
+    """
     dt_fecha = datetime.combine(dia, hora(23, 50))
     linhas = [
         (id_mov.proximo(), cod_loja, cod_produto, dt_fecha, "VND", "S",
@@ -420,6 +427,14 @@ def _movimentos_do_dia(dia: date, vnd: dict, dev: dict, id_mov: Contador,
          qtd, None, dt_fecha)
         for (cod_loja, cod_produto), qtd in dev.items()
     ]
+    return linhas
+
+
+def _movimentos_do_dia(dia: date, vnd: dict, dev: dict, id_mov: Contador,
+                       codigos: list[int], cods_loja: list[int],
+                       rng: Random) -> list[tuple]:
+    """VND e DEV consolidados por dia, mais alguns AJT e PRD."""
+    linhas = _movimentos_de_venda(dia, vnd, dev, id_mov)
     for cod_loja in cods_loja:
         for _ in range(rng.randrange(3, 9)):            # perdas
             dt = _hora_do_movimento(dia, rng)
@@ -648,17 +663,30 @@ def carga_delta(conn: psycopg.Connection, semente: int, data_ref: date,
          (DELTA_DIAS_FORA_JANELA, DELTA_DIAS_FORA_JANELA)),
     ):
         vendas, itens, ids = [], [], []
+        vnd_por_dia: dict[date, dict] = {}
         for _ in range(quantos):
             atraso = rng.randint(*faixa)
             dia = data_ref - timedelta(days=atraso)
-            v, i, _vnd, _dev, novos = _lote_de_vendas(
+            v, i, vnd, _dev, novos = _lote_de_vendas(
                 [rng.choice(cods_loja)], 1, dia, por_codigo, codigos, cum_pesos,
                 id_venda, id_item, cupom, rng, dt_alt=None)
             vendas.extend(v)
             itens.extend(i)
             ids.extend(novos)
+            # A baixa de estoque da venda atrasada chega junto com ela, com o
+            # mesmo dt_alt retroativo. Consolidada por dia, como no resto do
+            # ERP: varias vendas tardias do mesmo dia viram um movimento so
+            # por loja e produto.
+            acumulado = vnd_por_dia.setdefault(dia, {})
+            for chave, quantidade in vnd.items():
+                acumulado[chave] = acumulado.get(chave, Decimal(0)) + quantidade
+
         gab.inseriu("mov_venda", copiar(cur, "mov_venda", vendas))
         gab.inseriu("mov_venda_item", copiar(cur, "mov_venda_item", itens))
+        movimentos = []
+        for dia, vnd in sorted(vnd_por_dia.items()):
+            movimentos.extend(_movimentos_de_venda(dia, vnd, {}, id_mov))
+        gab.inseriu("mov_estoque", copiar(cur, "mov_estoque", movimentos))
         gab.injetou(tipo, ids)
         reservadas.extend(ids)
 
