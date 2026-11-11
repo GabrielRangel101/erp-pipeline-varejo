@@ -1,7 +1,0 @@
-Metadata-Version: 2.4
-Name: erp-pipeline-varejo
-Version: 0.2.0
-Summary: Pipeline de integracao com ERP de varejo (dados sinteticos)
-Requires-Python: >=3.11
-Requires-Dist: psycopg[binary]<4,>=3.2
-Requires-Dist: PyYAML<7,>=6

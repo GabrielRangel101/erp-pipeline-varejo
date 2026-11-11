@@ -8,3 +8,8 @@ __pycache__/
 
 # venv local
 .venv/
+
+# saida de build do "pip install -e ."
+*.egg-info/
+build/
+dist/
