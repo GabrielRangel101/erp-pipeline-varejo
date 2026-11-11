@@ -1,0 +1,174 @@
+# =====================================================================
+# CI do pipeline.
+#
+# POR QUE docker compose E NAO "services:" DO ACTIONS
+# O jeito idiomatico seria declarar o Postgres em services:. Aqui o compose do
+# proprio projeto e usado de proposito: assim o CI percorre exatamente o
+# caminho que esta no README (cp .env.example .env && docker compose up -d),
+# incluindo o bootstrap de papeis e bancos em docker/initdb. Um README que
+# nunca foi executado e um README que nao funciona.
+#
+# POR QUE NAO TEM NENHUM SECRET
+# As quatro senhas sao sorteadas pelo proprio job e exportadas como variavel
+# de ambiente. O banco vive dentro do runner, some no fim do job e so tem dado
+# sintetico - nao ha o que proteger. Em troca, qualquer pessoa que clonar o
+# repositorio tem o CI funcionando sem configurar nada. Em ambiente de
+# verdade, essas mesmas variaveis viriam de secrets; o codigo nao muda, porque
+# credencial so entra por variavel de ambiente.
+# =====================================================================
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Permissao minima: o job so precisa ler o codigo.
+permissions:
+  contents: read
+
+# Push novo na mesma branch cancela o anterior.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: src
+      # O .env define PGHOST/PGPORT; aqui so para os passos que chamam psql.
+      PGHOST: 127.0.0.1
+      PGPORT: "5432"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Fixa a versao: o PyYAML ainda nao tem wheel para 3.15 e o build
+          # da fonte quebra. Ver docs/resultados.md.
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Credencial nunca vai para o Git
+        run: |
+          if git ls-files --error-unmatch .env 2>/dev/null; then
+            echo "::error::.env esta versionado. Credencial nao pode entrar no repositorio."
+            exit 1
+          fi
+          echo ".env nao esta versionado, ok"
+
+      - name: Gerar .env com senhas sorteadas
+        run: |
+          cp .env.example .env
+          python - <<'PY'
+          import pathlib, re, secrets
+          arquivo = pathlib.Path(".env")
+          texto = arquivo.read_text(encoding="utf-8")
+          for chave in ("PG_SUPERUSER_PASSWORD", "ERP_APP_PASSWORD",
+                        "ERP_RO_PASSWORD", "PIPELINE_PASSWORD"):
+              texto = re.sub(rf"^{chave}=.*$", f"{chave}={secrets.token_urlsafe(24)}",
+                             texto, flags=re.M)
+          arquivo.write_text(texto, encoding="utf-8")
+          PY
+          echo "::add-mask::$(grep '^PG_SUPERUSER_PASSWORD=' .env | cut -d= -f2-)"
+          echo "::add-mask::$(grep '^ERP_APP_PASSWORD=' .env | cut -d= -f2-)"
+          echo "::add-mask::$(grep '^ERP_RO_PASSWORD=' .env | cut -d= -f2-)"
+          echo "::add-mask::$(grep '^PIPELINE_PASSWORD=' .env | cut -d= -f2-)"
+
+      - name: Subir o Postgres
+        run: |
+          # A imagem do runner traz um Postgres instalado. Normalmente ele esta
+          # parado, mas se estiver no ar ele ocupa a 5432 e o compose nao sobe.
+          sudo systemctl stop postgresql 2>/dev/null || true
+          docker compose up -d
+          for _ in $(seq 1 60); do
+            estado=$(docker inspect -f '{{.State.Health.Status}}' erp_pipeline_pg 2>/dev/null || true)
+            if [ "$estado" = "healthy" ]; then
+              echo "postgres saudavel"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::postgres nao ficou saudavel"
+          docker compose logs postgres
+          exit 1
+
+      - name: Conferir o esquema criado pelo bootstrap
+        run: |
+          origem=$(docker compose exec -T postgres psql -U postgres -d erp_origem -At -c \
+            "select count(*) from information_schema.tables where table_schema='erp' and table_type='BASE TABLE'")
+          dw=$(docker compose exec -T postgres psql -U postgres -d dw_varejo -At -c \
+            "select count(*) from information_schema.tables where table_schema in ('ctl','stg','trt','dw') and table_type='BASE TABLE'")
+          echo "erp_origem.erp: $origem tabelas | dw_varejo: $dw tabelas"
+          test "$origem" -eq 8
+          test "$dw" -eq 21
+
+      - name: Teste SQL da origem (seguranca e trigger)
+        run: |
+          docker compose exec -T postgres psql -U postgres -d erp_origem -v ON_ERROR_STOP=1 \
+            < tests/sql/01_origem_seguranca_e_trigger.sql
+
+      - name: pytest
+        run: pytest -q
+
+      # Os passos abaixo sao o ciclo completo, na escala pequena. Eles provam
+      # em CI o que o projeto promete: a carga fecha, e quando NAO fecha ela
+      # reprova em vez de entregar numero errado.
+      - name: Gerar a origem e carregar o DW
+        run: |
+          python -m pipeline.gerador --escala pequena --semente 42
+          python -m pipeline.carga --completa
+
+      - name: Um dia de operacao, com atraso fora da janela
+        run: python -m pipeline.gerador --delta --semente 43
+
+      - name: A carga incremental TEM que reprovar
+        run: |
+          # A chegada tardia de 15 dias fica fora da janela de reprocessamento
+          # de 7 dias. Se este comando passar, a rede de protecao furou - e o
+          # CI precisa gritar, nao comemorar.
+          if python -m pipeline.carga --incremental; then
+            echo "::error::a carga incremental passou com linha faltando na estrela"
+            exit 1
+          fi
+          echo "a conferencia reprovou, como tem que ser"
+
+      - name: A execucao reprovada nao pode ter avancado a marca-d'agua
+        run: |
+          # Comparar maximos globais seria fragil (qualquer execucao posterior
+          # mudaria a conta). A pergunta certa e direta: a ULTIMA execucao
+          # falhou, e nenhuma marca-d'agua foi gravada por ela?
+          status=$(docker compose exec -T postgres psql -U postgres -d dw_varejo -At -c \
+            "select status from ctl.execucao order by id_execucao desc limit 1")
+          marcou=$(docker compose exec -T postgres psql -U postgres -d dw_varejo -At -c \
+            "select exists (select 1 from ctl.marca_dagua
+                             where id_execucao = (select max(id_execucao) from ctl.execucao))")
+          echo "status da ultima execucao: $status | gravou marca-d'agua: $marcou"
+          test "$status" = "FALHA"
+          test "$marcou" = "f"
+
+      - name: A carga completa recupera
+        run: python -m pipeline.carga --completa
+
+      - name: Diagnostico (so quando algo falha)
+        if: failure()
+        run: |
+          docker compose exec -T postgres psql -U postgres -d dw_varejo -c \
+            "select id_execucao, modo, status, mensagem from ctl.execucao order by id_execucao desc limit 5" || true
+          docker compose exec -T postgres psql -U postgres -d dw_varejo -c \
+            "select verificacao, dia, cod_loja, qtd_origem, qtd_destino, qtd_quarentena, dif_qtd
+               from ctl.conferencia where not bateu order by id_conferencia desc limit 20" || true
+          docker compose logs postgres | tail -50 || true
+
+      - name: Derrubar o Postgres
+        if: always()
+        run: docker compose down -v
