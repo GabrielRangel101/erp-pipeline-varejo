@@ -278,7 +278,12 @@ def conferir_uma(conn_origem: psycopg.Connection, conn_dw: psycopg.Connection,
             dia, cod_loja, qtd_origem, vl_origem, qtd_destino, vl_destino,
             qtd_quarentena, vl_quarentena, dif_qtd, dif_valor, bateu))
 
-    with conn_dw.cursor() as cur:
+    # O diagnostico vai pela conexao de REGISTRO, nao pela de dados. A leitura
+    # acima roda dentro da transacao de publicacao (e por isso enxerga a
+    # estrela que ainda nao foi comitada); a escrita aqui nao pode, porque o
+    # rollback dessa transacao apagaria justamente a evidencia de qual dia x
+    # loja divergiu. Ver controle.py, "DUAS CONEXOES".
+    with execucao.log.cursor() as cur:
         cur.executemany(
             "INSERT INTO ctl.conferencia (id_execucao, sistema_origem, "
             "    verificacao, dia, cod_loja, qtd_origem, vl_origem, "
@@ -286,7 +291,8 @@ def conferir_uma(conn_origem: psycopg.Connection, conn_dw: psycopg.Connection,
             "    dif_qtd, dif_valor, bateu) "
             "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             linhas_ctl)
-    conn_dw.commit()
+    if execucao.conn_log is None:
+        conn_dw.commit()
     return resultado
 
 

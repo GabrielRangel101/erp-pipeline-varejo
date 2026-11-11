@@ -44,6 +44,46 @@ def _tem_outro_sistema(conn: psycopg.Connection, schema: str, tabela: str,
         (sistema_origem,)).fetchone()[0]
 
 
+def limpar_na_transacao(conn: psycopg.Connection, schema: str,
+                        tabelas: list[str], sistema_origem: str) -> str:
+    """Esvazia as tabelas SEM commit e SEM vacuum, para rodar dentro de uma
+    transacao maior. E o que a carga completa usa no schema dw.
+
+    POR QUE NAO TRUNCATE AQUI
+    TRUNCATE pega ACCESS EXCLUSIVE e so solta no fim da transacao. Como a
+    transacao de publicacao dura a carga inteira, qualquer SELECT no DW -
+    um dashboard, um relatorio - ficaria preso esperando do comeco ao fim.
+    DELETE pega so ROW EXCLUSIVE: quem le continua lendo, e pelo MVCC enxerga
+    o DW ANTERIOR ate o COMMIT. E esse o ponto da publicacao atomica.
+
+    POR QUE NAO VACUUM AQUI
+    VACUUM nao roda dentro de transacao. O lixo que o DELETE deixa e recolhido
+    depois do commit, por quem chamou (ver vacuum_analyze).
+
+    A ORDEM DAS TABELAS IMPORTA: ha chave estrangeira de fato para dimensao,
+    entao os fatos tem que vir primeiro na lista.
+    """
+    for tabela in tabelas:
+        conn.execute(
+            sql.SQL("DELETE FROM {tabela} WHERE sistema_origem = %s").format(
+                tabela=sql.Identifier(schema, tabela)),
+            (sistema_origem,))
+    return "delete (dentro da transacao de publicacao)"
+
+
+def vacuum_analyze(conn: psycopg.Connection, schema: str,
+                   tabelas: list[str]) -> None:
+    """Recolhe o lixo do DELETE e refaz a estatistica. Fora de transacao."""
+    anterior = conn.autocommit
+    conn.autocommit = True
+    try:
+        for tabela in tabelas:
+            conn.execute(sql.SQL("VACUUM (ANALYZE) {tabela}").format(
+                tabela=sql.Identifier(schema, tabela)))
+    finally:
+        conn.autocommit = anterior
+
+
 def limpar(conn: psycopg.Connection, schema: str, tabelas: list[str],
            sistema_origem: str) -> str:
     """Esvazia as tabelas para este sistema de origem. Devolve o metodo usado.

@@ -260,15 +260,17 @@ def carregar(conn: psycopg.Connection, execucao: Execucao,
             # So na carga completa. No incremental a dimensao nao foi truncada,
             # a estatistica continua boa e o ANALYZE seria so custo fixo (medido:
             # +2,7 s numa carga incremental de 14 mil itens, que leva 2,1 s).
+            #
+            # ANALYZE roda dentro da transacao de publicacao e isso e de
+            # proposito: a estatistica nova vale para o planner da propria
+            # transacao, que e onde o join do fato acontece.
             if completa:
                 cur.execute(f"ANALYZE dw.{etapa}")
-        conn.commit()
 
     with execucao.cronometrar("estrela", "fato_venda_item") as marca:
         cur.execute(SQL_FATO_VENDA_ITEM, parametros)
         resultado.fato_venda_item = cur.rowcount
         marca["escritas"] = cur.rowcount
-    conn.commit()
 
     # 3. Fato denso de estoque.
     if completa:
@@ -282,16 +284,25 @@ def carregar(conn: psycopg.Connection, execucao: Execucao,
             cur.execute(SQL_FATO_ESTOQUE_DIA, {**parametros, "desde": desde})
             resultado.fato_estoque_dia = cur.rowcount
             marca["escritas"] = cur.rowcount
-    conn.commit()
     return resultado
 
 
+# Ordem de limpeza: fatos antes das dimensoes, por causa da FK.
+TABELAS_DA_ESTRELA = ["fato_venda_item", "fato_estoque_dia",
+                      "dim_produto", "dim_loja"]
+
+
 def limpar_estrela(conn: psycopg.Connection, sistema_origem: str) -> str:
-    """Carga completa: zera a estrela deste sistema.
+    """Carga completa: zera a estrela deste sistema, DENTRO da transacao
+    de publicacao.
 
     dim_calendario fica de fora: ela nao tem sistema_origem e e recalculada
-    por upsert. Ver limpeza.py para o porque de nao ser um DELETE direto.
+    por upsert. Ver limpeza.py para o porque de ser DELETE e nao TRUNCATE.
     """
-    return limpeza.limpar(conn, "dw", ["fato_venda_item", "fato_estoque_dia",
-                                       "dim_produto", "dim_loja"],
-                          sistema_origem)
+    return limpeza.limpar_na_transacao(conn, "dw", TABELAS_DA_ESTRELA,
+                                       sistema_origem)
+
+
+def recolher_lixo(conn: psycopg.Connection) -> None:
+    """Depois do COMMIT da publicacao: recolhe o que o DELETE deixou."""
+    limpeza.vacuum_analyze(conn, "dw", TABELAS_DA_ESTRELA)
