@@ -51,17 +51,25 @@ def incremental(conector, conexao_dw):
 
     Refaz tudo do zero para nao depender da ordem dos testes.
 
-    O incremental termina em FALHA de PROPOSITO: o delta injeta chegada tardia
-    com 15 dias de atraso, a janela de reprocessamento e de 7, e a conferencia
-    da etapa 4 derruba a carga por causa dela. Isso nao atrapalha os testes
-    abaixo porque a conferencia roda DEPOIS da estrela e ANTES da marca-d'agua:
-    o DW ja esta escrito com tudo que a carga alcancou. Quem prova o
-    comportamento da conferencia em si e tests/test_conferencia.py.
+    O delta injeta chegada tardia com 15 dias de atraso e a janela de
+    reprocessamento e de 7, entao a conferencia da historia inteira derruba
+    esta carga. Os testes abaixo olham o DW DEPOIS dela, e desde que a
+    publicacao virou atomica uma carga reprovada nao deixa nada publicado -
+    o DW ficaria igual ao da carga completa e os testes nao provariam nada.
+
+    Por isso o incremental roda com --conferir-desde depois do dia atrasado:
+    a conferencia passa, a carga PUBLICA, e o DW fica no estado que interessa
+    aqui - com as vendas novas, com o cancelamento de cabecalho, e com o
+    buraco do atraso fora da janela. O proprio --conferir-desde e a troca
+    documentada em conferencia.py, e tests/test_conferencia.py prova os dois
+    lados dela: sem ele a carga reprova, com ele o furo passa.
     """
     gerar_origem()
     assert carga.executar(conector, completa=True) == 0
     gabarito = gerar_delta()
-    assert carga.executar(conector, completa=False) == 1
+    depois_do_atraso = DATA_REF - timedelta(days=7)
+    assert carga.executar(conector, completa=False,
+                          conferir_desde=depois_do_atraso) == 0
     return gabarito
 
 

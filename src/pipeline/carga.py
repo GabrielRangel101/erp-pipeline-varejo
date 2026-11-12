@@ -9,31 +9,54 @@ Ordem fixa, e o motivo de cada passo estar onde esta:
 
   1. extracao     origem -> stg. Le como erp_ro (SELECT e nada mais).
   2. tratamento   stg -> trt + quarentena. So aqui alguma linha e recusada.
-  3. estrela      trt -> dw. Dimensao antes de fato; fato so entra com sk
-                  resolvida.
-  4. conferencia  origem == destino + quarentena, por dia e loja, em contagem
-                  e em valor. E um PORTAO: se nao fecha, a carga falha aqui.
-  5. marca-d'agua avanca SO AGORA, e so se os quatro passos acima passaram. Se a
-                  carga morrer em qualquer ponto, a marca fica onde estava e a
-                  proxima rodada rele a mesma janela. Como todo passo e upsert
-                  por chave natural, reler nao duplica. Avancar a marca cedo
-                  perderia dado em silencio - o pior modo de falha possivel.
+  3. PUBLICACAO   uma transacao so, em conn_dw:
+       3a. (completa) esvazia a estrela deste sistema;
+       3b. estrela    trt -> dw. Dimensao antes de fato; fato so entra com sk
+                      resolvida;
+       3c. conferencia  origem == destino + quarentena, por dia e loja, em
+                      contagem e em valor. E um PORTAO: se nao fecha, a carga
+                      falha aqui;
+       3d. marca-d'agua;
+       3e. COMMIT.
+  4. (completa) VACUUM (ANALYZE) do dw, ja fora da transacao.
+
+POR QUE A PUBLICACAO E UMA TRANSACAO SO
+Staging e tratada podem comitar por entidade: ninguem consulta elas. O dw, sim.
+Se a estrela comita antes da conferencia e a conferencia reprova, o DW fica
+com carga PARCIAL visivel - numero incompleto, sem nada na tela dizendo isso.
+E o modo de falha que este projeto existe para recusar.
+
+No Postgres o MVCC ja entrega o que se precisa: quem consulta o DW enxerga o
+estado ANTERIOR ate o COMMIT, e enxerga o novo inteiro depois dele. Nunca o
+meio. A conferencia roda DENTRO dessa transacao, entao ela ve a estrela nova
+(ainda nao comitada) - que e exatamente o que ela tem que julgar.
+
+O custo esta anotado no README, em "Limites conhecidos": o tamanho de uma
+carga passa a ser limitado por WAL e espaco, porque nada e liberado antes do
+commit.
+
+A extracao COMITA conn_dw (e preciso: a temporaria da COPY cai no commit).
+Por isso a transacao de publicacao so pode comecar DEPOIS do tratamento.
+
+MARCA-D'AGUA
+Avanca dentro da mesma transacao, no fim. Se a carga morrer em qualquer ponto,
+ela fica onde estava e a proxima rodada rele a mesma janela. Como todo passo e
+upsert por chave natural, reler nao duplica. Avancar a marca cedo perderia
+dado em silencio - o pior modo de falha possivel.
+
+Quando a conferencia falha a marca FICA ONDE ESTAVA de proposito. A proxima
+rodada vai reler a mesma janela e falhar de novo, ate alguem olhar. Um
+pipeline que destrava sozinho depois de nao fechar a conta so troca erro alto
+por erro silencioso.
+
+REGISTRO SOBREVIVE AO ROLLBACK
+ctl.execucao, ctl.etapa e ctl.conferencia sao gravados por uma segunda conexao,
+em autocommit (ver controle.py). Se fossem pela conexao de dados, o rollback
+levaria junto a evidencia de qual dia x loja divergiu.
 
 Codigo de saida: 0 se terminou OK, 1 se falhou. A execucao fica registrada em
 ctl.execucao com status FALHA e a mensagem do erro, entao o agendador pode
 alarmar sem precisar ler log.
-
-Quando a conferencia falha a marca-d'agua FICA ONDE ESTAVA de proposito. A
-proxima rodada vai reler a mesma janela e falhar de novo, ate alguem olhar.
-Um pipeline que destrava sozinho depois de nao fechar a conta so troca erro
-alto por erro silencioso.
-
-O que a carga ja escreveu no DW NAO e desfeito nesse caso. A conferencia roda
-depois da estrela, e cada passo comita o seu pedaco (senao uma carga de 1
-milhao de linhas viraria uma transacao gigante). O dado que entrou esta
-certo - so esta INCOMPLETO. Quem impede isso de virar silencio sao as duas
-outras coisas: a marca-d'agua parada e o status FALHA em ctl.execucao. A saida
-e 'python -m pipeline.carga --completa'.
 """
 
 from __future__ import annotations
@@ -80,20 +103,27 @@ def executar(conector: Conector, completa: bool,
     inicio = time.perf_counter()
 
     conn_dw = conectar_dw()
-    conn_origem = conectar_origem_leitura()
-    execucao = controle.abrir_execucao(conn_dw, conector.sistema_origem, modo)
+    # Conexao separada so para o registro (ctl.execucao, ctl.etapa,
+    # ctl.conferencia). Autocommit de proposito: tem que sobreviver ao
+    # rollback da transacao de publicacao. Ver controle.py.
+    conn_log = conectar_dw(autocommit=True)
+    # Retrato unico da origem: a extracao de TODAS as entidades e a
+    # conferencia leem o mesmo snapshot. Ver db.py.
+    conn_origem = conectar_origem_leitura(snapshot_consistente=True)
+
+    execucao = controle.abrir_execucao(conn_dw, conector.sistema_origem, modo,
+                                       conn_log=conn_log)
     print(f"execucao {execucao.id_execucao} | {conector.sistema_origem} | {modo}")
 
     try:
         if completa:
-            # Zera de tras para frente para nao deixar orfao em nenhum ponto.
-            metodo = estrela.limpar_estrela(conn_dw, conector.sistema_origem)
+            # Staging e tratada podem ser limpas e comitadas agora: ninguem
+            # consulta elas. A estrela NAO - ela so e tocada dentro da
+            # transacao de publicacao, mais abaixo.
             tratamento.limpar_tratada(conn_dw, conector.sistema_origem)
             extracao.limpar_staging(conn_dw, conector)
-            controle.limpar_marcas(conn_dw, conector.sistema_origem)
             conn_dw.commit()
-            print(f"  limpeza     metodo={metodo} "
-                  f"(delete+vacuum quando o DW tem outro sistema de origem)")
+            print("  limpeza     stg e trt zerados; o dw so dentro da publicacao")
 
         marcas = _extrair_tudo(conn_origem, conn_dw, conector, execucao, completa)
 
@@ -103,6 +133,15 @@ def executar(conector: Conector, completa: bool,
                   f"ok={resultado.promovidas:>9,} quarentena={resultado.rejeitadas:>5,} "
                   f"liberadas={resultado.liberadas:>4,}"
                   f"{'  [' + motivos + ']' if motivos else ''}".replace(",", "."))
+
+        # ----- transacao de publicacao: daqui ate o commit, tudo ou nada -----
+        if completa:
+            # Inclusive as marcas: se a carga reprovar, elas tem que voltar
+            # junto com o DW. Apagar as marcas em separado deixaria o proximo
+            # incremental lendo a origem inteira sem necessidade.
+            metodo = estrela.limpar_estrela(conn_dw, conector.sistema_origem)
+            controle.limpar_marcas(conn_dw, conector.sistema_origem)
+            print(f"  limpeza     dw: metodo={metodo}")
 
         alvo = estrela.carregar(conn_dw, execucao, completa)
         print(f"  estrela     dim_loja={alvo.dim_loja} dim_produto={alvo.dim_produto} "
@@ -120,13 +159,23 @@ def executar(conector: Conector, completa: bool,
         # So agora. Ver o cabecalho deste modulo.
         for entidade, dt_alt_max in marcas.items():
             controle.gravar_marca_dagua(execucao, entidade, dt_alt_max)
+
         conn_dw.commit()
+        # ----- fim da transacao de publicacao: agora o DW novo esta visivel --
+
+        if completa:
+            # VACUUM nao roda dentro de transacao, por isso e aqui: recolhe o
+            # lixo que o DELETE da limpeza deixou e refaz a estatistica.
+            estrela.recolher_lixo(conn_dw)
 
         controle.fechar_execucao(execucao, "OK")
         print(f"OK em {time.perf_counter() - inicio:.2f}s")
         return 0
 
     except Exception as erro:                              # noqa: BLE001
+        # Desfaz a publicacao inteira. O DW volta a ser exatamente o que era
+        # antes desta carga; o registro em ctl nao volta, porque vai por
+        # conn_log.
         conn_dw.rollback()
         controle.fechar_execucao(execucao, "FALHA",
                                  f"{type(erro).__name__}: {erro}")
@@ -136,6 +185,7 @@ def executar(conector: Conector, completa: bool,
     finally:
         conn_origem.close()
         conn_dw.close()
+        conn_log.close()
 
 
 def construir_parser() -> argparse.ArgumentParser:

@@ -57,6 +57,12 @@ Na prática, `--completa` é a saída de emergência: é o que o operador roda
 quando a conferência reprova por linha fora da janela. A própria mensagem de
 falha diz isso.
 
+**E ela é segura de recomendar porque não destrói nada antes de ter o que
+colocar no lugar.** A limpeza da estrela, a recarga e a conferência estão na
+mesma transação: ou o DW novo aparece inteiro, ou o anterior continua lá.
+Recomendar às 3 da manhã um comando que esvazia o DW e só depois tenta
+recarregar seria recomendar ficar sem DW.
+
 As duas terminam na mesma conferência e no mesmo invariante. Não existe modo
 "rápido e sem conferir".
 
@@ -73,6 +79,10 @@ Avançando só no fim, carga que morre é carga que não aconteceu: a próxima
 relê a mesma fatia. E reler não duplica, porque tudo é
 `INSERT ... ON CONFLICT DO UPDATE` por chave natural. A idempotência é o que
 torna essa escolha barata.
+
+A marca é gravada **dentro da mesma transação que publica a estrela**, e não
+depois dela. Os dois são o mesmo fato: "este dado está no DW" e "já li até
+aqui" não podem discordar nem por um instante.
 
 ### Por que a conferência é por dia e loja, e não um total?
 
@@ -158,11 +168,23 @@ antes de liberar acesso: "o que exatamente isso faz no meu ERP?". Nada. Lê.
 
 ### O que acontece se a carga morrer no meio?
 
-Nada é perdido e nada é duplicado. A marca-d'água não avançou, então a próxima
-carga relê a mesma fatia; todo escrita é upsert por chave natural, então reler
-reescreve a mesma linha. A etapa que falhou fica registrada em `ctl.etapa` com
-sufixo `:FALHA`, e o erro original sobe — não é mascarado pelo erro de
-registrar o erro.
+Nada é perdido, nada é duplicado e **nada aparece pela metade**.
+
+O DW volta a ser exatamente o que era: a publicação é uma transação única
+(limpeza da estrela, estrela, conferência, marca-d'água), então o `ROLLBACK`
+desfaz tudo de uma vez. Quem estiver consultando o DW nesse momento nunca viu
+a carga começar — pelo MVCC do Postgres, a transação de leitura enxerga o
+estado anterior até o `COMMIT`.
+
+A marca-d'água não avançou, então a próxima carga relê a mesma fatia; toda
+escrita é upsert por chave natural, então reler reescreve a mesma linha.
+
+O que **não** volta é o registro: `ctl.execucao`, `ctl.etapa` e
+`ctl.conferencia` são gravados por uma segunda conexão, em autocommit, justamente
+para sobreviver ao rollback. A etapa que falhou fica em `ctl.etapa` com sufixo
+`:FALHA`, as linhas divergentes ficam em `ctl.conferencia`, e o erro original
+sobe — não é mascarado pelo erro de registrar o erro. Desfazer o dado e
+desfazer a evidência de por que ele foi desfeito são coisas diferentes.
 
 ### Como você integraria um ERP novo?
 

@@ -121,6 +121,9 @@ def garantir(conn: psycopg.Connection, inicio: date, fim: date) -> int:
 
     A folga evita que a primeira venda de janeiro do ano seguinte esbarre na FK
     da dimensao. Repetivel: upsert por sk_data.
+
+    NAO COMITA: roda dentro da transacao de publicacao da carga (ver carga.py).
+    Quem chama decide quando publicar.
     """
     inicio = date(inicio.year, 1, 1)
     fim = date(fim.year + 1, 12, 31)
@@ -134,5 +137,4 @@ def garantir(conn: psycopg.Connection, inicio: date, fim: date) -> int:
             f"INSERT INTO dw.dim_calendario ({colunas}) VALUES ({marcadores}) "
             f"ON CONFLICT (sk_data) DO UPDATE SET {atribuicoes}",
             dados)
-    conn.commit()
     return len(dados)

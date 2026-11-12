@@ -13,6 +13,26 @@ Duas regras que valem a pena saber de cor:
    dt_alt >= marca_dagua - N dias. Isso cobre dois casos de uma vez: a linha
    que o ERP gravou com dt_alt retroativo e a corrida entre ler a origem e
    gravar a marca (linha escrita durante a propria carga).
+
+DUAS CONEXOES, E O MOTIVO
+Execucao carrega duas: `conn`, a conexao de DADOS, e `conn_log`, a conexao de
+REGISTRO. A publicacao do DW e uma transacao so em `conn` (ver carga.py), e se
+ela falhar o rollback desfaz tudo que estiver nela. Isso e o certo para o dado
+e seria desastroso para o log: as linhas de ctl.etapa e de ctl.conferencia da
+execucao que falhou sumiriam junto, e elas sao justamente a EVIDENCIA de onde
+a conta nao fechou.
+
+Entao a divisao e por natureza da linha, nao por schema:
+
+  ctl.marca_dagua   e ESTADO -> vai em `conn`, dentro da transacao de
+                    publicacao. Avancar a marca tem que ser atomico com
+                    publicar o dado que ela representa.
+  ctl.execucao      e REGISTRO -> vai em `conn_log`, que e autocommit e
+  ctl.etapa         sobrevive ao rollback.
+  ctl.conferencia
+
+Sem conn_log (o padrao), as duas apontam para a mesma conexao e tudo se
+comporta como antes: e o que os testes que chamam abrir_execucao direto usam.
 """
 
 from __future__ import annotations
@@ -33,13 +53,19 @@ class Execucao:
     sistema_origem: str
     modo: str
     id_execucao: int
+    conn_log: psycopg.Connection | None = None
     _seq: int = field(default=0, repr=False)
+
+    @property
+    def log(self) -> psycopg.Connection:
+        """Onde o registro e gravado. Ver o cabecalho deste modulo."""
+        return self.conn_log if self.conn_log is not None else self.conn
 
     def registrar_etapa(self, etapa: str, entidade: str | None,
                         linhas_lidas: int | None, linhas_escritas: int | None,
                         duracao_ms: int) -> None:
         self._seq += 1
-        self.conn.execute(
+        self.log.execute(
             "INSERT INTO ctl.etapa (id_execucao, seq, etapa, entidade, "
             "linhas_lidas, linhas_escritas, duracao_ms) "
             "VALUES (%s, %s, %s, %s, %s, %s, %s)",
@@ -63,12 +89,16 @@ class Execucao:
             # "current transaction is aborted" e o erro DE VERDADE some no
             # meio do caminho. Desfaz primeiro, registra a etapa que quebrou
             # (que e a informacao util no dia seguinte) e deixa o erro subir.
+            #
+            # O rollback aqui tambem e o que desfaz a transacao de publicacao
+            # quando quem quebra e um passo dentro dela.
             ms = int((time.perf_counter() - inicio) * 1000)
             self.conn.rollback()
             try:
                 self.registrar_etapa(f"{etapa}:FALHA", entidade, marca["lidas"],
                                      marca["escritas"], ms)
-                self.conn.commit()
+                if self.conn_log is None:
+                    self.conn.commit()
             except Exception:                              # noqa: BLE001
                 pass            # nao deixar o log encobrir o erro original
             raise
@@ -78,22 +108,26 @@ class Execucao:
                                  marca["escritas"], ms)
 
 
-def abrir_execucao(conn: psycopg.Connection, sistema_origem: str,
-                   modo: str) -> Execucao:
-    linha = conn.execute(
+def abrir_execucao(conn: psycopg.Connection, sistema_origem: str, modo: str,
+                   conn_log: psycopg.Connection | None = None) -> Execucao:
+    """Abre a execucao. conn_log, quando dado, recebe todo o REGISTRO."""
+    alvo = conn_log if conn_log is not None else conn
+    linha = alvo.execute(
         "INSERT INTO ctl.execucao (sistema_origem, modo) VALUES (%s, %s) "
         "RETURNING id_execucao", (sistema_origem, modo)).fetchone()
-    conn.commit()
-    return Execucao(conn, sistema_origem, modo, linha[0])
+    if conn_log is None:
+        conn.commit()
+    return Execucao(conn, sistema_origem, modo, linha[0], conn_log)
 
 
 def fechar_execucao(execucao: Execucao, status: str,
                     mensagem: str | None = None) -> None:
-    execucao.conn.execute(
+    execucao.log.execute(
         "UPDATE ctl.execucao SET status = %s, mensagem = %s, dt_fim = now() "
         "WHERE id_execucao = %s",
         (status, mensagem, execucao.id_execucao))
-    execucao.conn.commit()
+    if execucao.conn_log is None:
+        execucao.conn.commit()
 
 
 def ler_marca_dagua(conn: psycopg.Connection, sistema_origem: str,

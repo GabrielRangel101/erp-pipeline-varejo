@@ -84,9 +84,40 @@ def conectar_origem_app(autocommit: bool = False) -> psycopg.Connection:
     return conectar(ERP_APP, autocommit=autocommit)
 
 
-def conectar_origem_leitura(autocommit: bool = False) -> psycopg.Connection:
-    """Origem como erp_ro (somente leitura). E o que o pipeline usa."""
-    return conectar(ERP_RO, autocommit=autocommit)
+def conectar_origem_leitura(autocommit: bool = False,
+                            snapshot_consistente: bool = False
+                            ) -> psycopg.Connection:
+    """Origem como erp_ro (somente leitura). E o que o pipeline usa.
+
+    snapshot_consistente abre a conexao em REPEATABLE READ + READ ONLY. A
+    partir do primeiro comando ela passa a ver um RETRATO FIXO da origem, que
+    nao muda ate o fim da transacao.
+
+    POR QUE ISSO IMPORTA
+    A extracao le a origem e, minutos depois, a conferencia le a origem de
+    novo para somar o lado de ca da conta. O ERP nao para enquanto o pipeline
+    roda: uma venda gravada entre as duas leituras aparece na contagem da
+    conferencia sem estar no destino, e a carga reprova sem ter perdido nada.
+    Falso positivo em portao de qualidade e caro duas vezes - derruba a carga
+    e ensina o operador a desconfiar do alarme.
+
+    Com o retrato fixo, os dois lados julgam o MESMO instante da origem. O que
+    o ERP gravar durante a carga entra na proxima, pela marca-d'agua.
+
+    PRECO: o snapshot segura o xmin da origem enquanto a transacao estiver
+    aberta, ou seja, durante a carga inteira. O autovacuum do ERP nao recolhe
+    versao de linha mais nova que isso nesse periodo.
+
+    So vale com autocommit desligado: em autocommit cada comando e a sua
+    propria transacao e nao ha snapshot para compartilhar.
+    """
+    conn = conectar(ERP_RO, autocommit=autocommit)
+    if snapshot_consistente:
+        # Tem que ser antes do primeiro comando: depois disso a transacao ja
+        # comecou e o Postgres recusa a troca.
+        conn.read_only = True
+        conn.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
+    return conn
 
 
 def conectar_dw(autocommit: bool = False) -> psycopg.Connection:

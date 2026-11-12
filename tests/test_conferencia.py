@@ -255,3 +255,7 @@ def test_mensagem_de_falha_diz_o_que_fazer():
     assert "2026-10-27" in mensagem
     assert "--completa" in mensagem
     assert "marca-d'agua NAO foi avancada" in mensagem
+    # Desde que a publicacao virou uma transacao so, a mensagem tem que dizer
+    # tambem que o DW ficou intacto: e a diferenca entre o operador correr
+    # para consertar e o operador poder esperar o horario comercial.
+    assert "DW NAO foi alterado" in mensagem
