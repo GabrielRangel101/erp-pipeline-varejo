@@ -266,14 +266,25 @@ dizer "passou" não prova nada.
 
 ## Etapa 5 — CI no GitHub Actions
 
-Execução de referência: **`main` @ 4eb8685, 2026-11-11, verde em 1m39s, sem
-avisos** ([run 43050933646](https://github.com/GabrielRangel101/erp-pipeline-varejo/actions/runs/43050933646)).
+Execução de referência: **`wap-publicacao-atomica` @ 4a310a4, 2026-11-11,
+verde em 1m11s, sem avisos**
+([run 43120389786](https://github.com/GabrielRangel101/erp-pipeline-varejo/actions/runs/43120389786)).
 Runner `ubuntu-24.04` fixo, `actions/checkout@v7`, `actions/setup-python@v7`,
 Python 3.13, Postgres 16 subido pelo `docker compose` do próprio projeto.
 
+Este job já inclui os dois passos novos da publicação atômica: ele tira um
+retrato do `dw` antes da carga que tem que reprovar e compara depois. A saída
+`o DW esta identico ao de antes da carga reprovada` é a promessa da coluna de
+falha do README sendo verificada, não confiada.
+
+A medição anterior, em `main` @ 4eb8685, foi **1m39s**
+([run 43050933646](https://github.com/GabrielRangel101/erp-pipeline-varejo/actions/runs/43050933646)),
+com a mesma configuração e 4 testes a menos. A diferença de 28 s é variação de
+runner, não ganho do código — o detalhamento abaixo é o daquela execução.
+
 | Passo | Tempo |
 |---|---:|
-| pytest (107 testes) | 32 s |
+| pytest (107 testes, run 43050933646; 111 em 20,53 s no run novo) | 32 s |
 | Subir o Postgres (pull + healthcheck) | 20 s |
 | Gerar a origem e carga completa | 13 s |
 | Carga completa recuperando | 11 s |

@@ -81,7 +81,7 @@ Medido na escala de 1 milhão de itens de venda (detalhes e método em
 | Conferência da história inteira, a cada carga | **2,52 s** |
 | Carga com atraso fora da janela | **reprova**, código de saída 1, DW e marca-d'água intactos |
 | Testes | **111**, verdes, em 40 s |
-| CI completo no GitHub Actions | **1m39s** |
+| CI completo no GitHub Actions | **1m11s** |
 
 E o teste que importa. Quando o gerador injeta uma venda com 15 dias de
 atraso e a janela de reprocessamento é de 7, a carga incremental **falha**,
